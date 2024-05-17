@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import enum
 import math
+import dataclasses
 
 import zigpy.types
+from .common import crc16_kermit
 
 
 class PackedUInt21(zigpy.types.uint_t, bits=21):  # type: ignore[call-arg]
@@ -252,3 +254,92 @@ class Status(zigpy.types.enum8):
     RESPONSE_TIMEOUT = 24  # No response received from remote node
 
     UNK = 70
+
+
+@dataclasses.dataclass(frozen=True)
+class HDLCLiteFrame:
+    data: bytes
+
+    def serialize(self) -> bytes:
+        payload = self.data + crc16_kermit(self.data).to_bytes(2, "little")
+        encoded = bytearray()
+
+        for byte in payload:
+            if byte in (
+                HDLCSpecial.FLAG,
+                HDLCSpecial.ESCAPE,
+                HDLCSpecial.XON,
+                HDLCSpecial.XOFF,
+                HDLCSpecial.VENDOR,
+            ):
+                encoded.append(HDLCSpecial.ESCAPE)
+                byte ^= 0x20
+
+            encoded.append(byte)
+
+        return bytes([HDLCSpecial.FLAG]) + bytes(encoded) + bytes([HDLCSpecial.FLAG])
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> HDLCLiteFrame:
+        unescaped = bytearray()
+        unescaping = False
+
+        for byte in data:
+            if unescaping:
+                byte ^= 0x20
+
+                if byte not in (
+                    HDLCSpecial.FLAG,
+                    HDLCSpecial.ESCAPE,
+                    HDLCSpecial.XON,
+                    HDLCSpecial.XOFF,
+                    HDLCSpecial.VENDOR,
+                ):
+                    raise ValueError(f"Invalid unescaped byte: 0x{byte:02X}")
+
+                unescaping = False
+            elif byte == HDLCSpecial.ESCAPE:
+                unescaping = True
+                continue
+            elif byte == HDLCSpecial.FLAG:
+                continue
+
+            unescaped.append(byte)
+
+        data = unescaped[:-2]
+        crc = unescaped[-2:]
+        computed_crc = crc16_kermit(data).to_bytes(2, "little")
+
+        if computed_crc != crc:
+            raise ValueError(f"Invalid CRC-16: expected {crc!r}, got {computed_crc!r}")
+
+        return cls(data=bytes(data))
+
+
+class SpinelHeader(zigpy.types.Struct):
+    # TODO: allow specifying struct endianness
+    transaction_id: zigpy.types.uint4_t
+    network_link_id: zigpy.types.uint2_t
+    flag: zigpy.types.uint2_t
+
+
+@dataclasses.dataclass(frozen=True)
+class SpinelFrame:
+    header: SpinelHeader
+    command_id: CommandID
+    data: bytes
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> SpinelFrame:
+        orig_data = data
+        header, data = SpinelHeader.deserialize(data)
+
+        if header.flag != 0b10:
+            raise ValueError(f"Spinel header flag is invalid in frame: {orig_data!r}")
+
+        command_id, data = CommandID.deserialize(data)
+
+        return cls(header=header, command_id=command_id, data=data)
+
+    def serialize(self) -> bytes:
+        return self.header.serialize() + self.command_id.serialize() + self.data
