@@ -115,10 +115,10 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         ep.device_type = descriptor.device_type
 
         for cluster_id in descriptor.input_clusters:
-            ep.add_server_cluster(cluster_id)
+            ep.add_input_cluster(cluster_id)
 
         for cluster_id in descriptor.output_clusters:
-            ep.add_client_cluster(cluster_id)
+            ep.add_output_cluster(cluster_id)
 
     async def send_packet(self, packet):
         _LOGGER.info("Sending packet %s", packet)
@@ -278,7 +278,10 @@ class ControllerApplication(zigpy.application.ControllerApplication):
 
             return status_code
 
-    async def _spinel_packet_callback(self, _, value: bytes):
+    def _spinel_packet_callback(self, value: bytes):
+        asyncio.create_task(self._async_spinel_packet_callback(value))
+
+    async def _async_spinel_packet_callback(self, value: bytes):
         frame_len, data = zigpy.types.uint16_t.deserialize(value)
         frame = data[:frame_len]
         _metadata = data[frame_len:]

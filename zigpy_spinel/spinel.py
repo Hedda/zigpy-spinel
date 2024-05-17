@@ -29,7 +29,9 @@ class SpinelProtocol(SerialProtocol):
         super().__init__()
         self._transaction_id: int = 1
         self._pending_frames: dict[int, asyncio.Future] = {}
-        self._property_listeners: defaultdict[PropertyID, list[typing.callable]] = {}
+        self._property_listeners: defaultdict[PropertyID, list[typing.callable]] = (
+            defaultdict(list)
+        )
 
     def data_received(self, data: bytes) -> None:
         super().data_received(data)
