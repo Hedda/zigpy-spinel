@@ -1,11 +1,12 @@
 import asyncio
 import struct
+import datetime
 import sys
 import zigpy.types
 
 from ..common import connect_protocol
 from ..spinel import SpinelProtocol
-from ..spinel_types import CommandID, PropertyID
+from ..spinel_types import PropertyID
 
 
 def ieee_15_4_fcs(data: bytes) -> bytes:
@@ -55,12 +56,13 @@ class PcapWriter:
 async def main():
     async with connect_protocol(sys.argv[1], 460800, SpinelProtocol) as spinel:
         await spinel.probe()
-        await spinel.send_command(CommandID.RESET, b"", wait_response=False)
-        await asyncio.sleep(2)
+        await spinel.reset()
 
-        with open(sys.argv[3], "wb"):
-            pcap_writer = PcapWriter(sys.stdout.buffer)
-            # pcap_writer = PcapWriter(f)
+        packet_queue = asyncio.Queue()
+        spinel.add_property_listener(PropertyID.STREAM_RAW, packet_queue.put_nowait)
+
+        with open(sys.argv[3], "wb") as f:
+            pcap_writer = PcapWriter(f)
             pcap_writer.write_header(195)  # LINKTYPE_IEEE802_15_4
 
             await spinel.set_property(PropertyID.PHY_ENABLED, zigpy.types.uint8_t(1))
@@ -74,10 +76,18 @@ async def main():
                 PropertyID.PHY_CHAN, zigpy.types.uint8_t(int(sys.argv[2]))
             )
 
-            async for timestamp, frame, metadata in spinel.sniff():
+            while True:
+                value = await packet_queue.get()
+
+                frame_len, data = zigpy.types.uint16_t.deserialize(value)
+                frame = data[:frame_len]
+                _metadata = data[frame_len:]
+
                 # Recompute the FCS
-                frame = frame[:-2] + ieee_15_4_fcs(frame[:-2])
-                pcap_writer.write_packet(frame, timestamp)
+                frame_data = frame[:-2] + ieee_15_4_fcs(frame[:-2])
+                pcap_writer.write_packet(
+                    frame_data, datetime.datetime.now(datetime.timezone.utc)
+                )
 
 
 if __name__ == "__main__":

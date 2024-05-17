@@ -13,7 +13,7 @@ import zigpy.types as t
 import zigpy.zdo.types as zdo_t
 
 from .. import zigbee_types as zigbee
-from ..spinel import CommandID, PropertyID, SpinelProtocol
+from ..spinel import PropertyID, SpinelProtocol
 from ..spinel_types import Status
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,14 +24,14 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         super().__init__(*args, **kwargs)
         self._spinel = None
         self._rx_task = None
-        self._send_lock = asyncio.Semaphore(16)
-        self._frame_ctr = 0
+
+        self._permit_reset_task = None
+        self._debug_tx_counter = 0
 
     async def _watchdog_feed(self):
         await self._spinel.probe()
 
     async def connect(self):
-        _LOGGER.debug("Connecting???????????")
         loop = asyncio.get_running_loop()
         _, spinel = await zigpy.serial.create_serial_connection(
             loop=loop,
@@ -42,9 +42,9 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         )
         await spinel.wait_until_connected()
         await spinel.probe()
+        await spinel.reset()
 
         self._spinel = spinel
-        _LOGGER.debug("READY???????????")
 
     async def disconnect(self):
         pathlib.Path("frame_counter.json").write_text(
@@ -82,15 +82,7 @@ class ControllerApplication(zigpy.application.ControllerApplication):
             descriptor_capability_field=zdo_t.NodeDescriptor.DescriptorCapability.NONE,
         )
 
-        ep = coordinator.add_endpoint(1)
-        ep.status = zigpy.endpoint.Status.ZDO_INIT
-
-        await self._spinel.send_command(
-            CommandID.RESET,
-            b"",
-            wait_response=False,
-        )
-        await asyncio.sleep(3)
+        await self.register_endpoints()
 
         await self._spinel.set_property(PropertyID.PHY_ENABLED, t.uint8_t(1))
         await self._spinel.set_property(
@@ -108,14 +100,25 @@ class ControllerApplication(zigpy.application.ControllerApplication):
             PropertyID.PHY_CHAN, t.uint8_t(self.state.network_info.channel)
         )
 
-        self._rx_task = asyncio.create_task(self._rx_loop())
         await asyncio.sleep(1)
+
+        self._spinel.add_property_listener(
+            PropertyID.STREAM_RAW, self._spinel_packet_callback
+        )
 
     async def force_remove(self, device):
         pass
 
     async def add_endpoint(self, descriptor):
-        pass
+        ep = self._device.add_endpoint(descriptor.endpoint)
+        ep.profile_id = descriptor.profile
+        ep.device_type = descriptor.device_type
+
+        for cluster_id in descriptor.input_clusters:
+            ep.add_server_cluster(cluster_id)
+
+        for cluster_id in descriptor.output_clusters:
+            ep.add_client_cluster(cluster_id)
 
     async def send_packet(self, packet):
         _LOGGER.info("Sending packet %s", packet)
@@ -209,340 +212,337 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         await self._send_spinel_frame(frame_802154)
 
     async def _send_spinel_frame(self, frame, *, attempts: int = 5):
-        async with self._send_lock:
-            for attempt in range(attempts):
-                self._frame_ctr += 1
-                frame_num = self._frame_ctr
+        for attempt in range(attempts):
+            self._debug_tx_counter += 1
+            frame_num = self._debug_tx_counter
 
-                if attempt > 0:
-                    _LOGGER.debug(
-                        "Sending frame %d, attempt %d: %s",
-                        frame_num,
-                        attempt + 1,
-                        frame,
-                    )
-                else:
-                    _LOGGER.debug("Sending frame %d: %s", frame_num, frame)
-
-                data = frame.serialize()
-
-                start_time = time.time()
-                rsp_prop_id, rsp_data = await self._spinel.set_property(
-                    PropertyID.STREAM_RAW,
-                    (
-                        t.uint16_t(len(data)).serialize()
-                        + data
-                        + t.uint8_t(self.state.network_info.channel).serialize()
-                        + t.uint8_t(1).serialize()  # CCA backoff attempts
-                        + t.uint8_t(4).serialize()  # CCA retries
-                        + t.Bool.true.serialize()  # enable CSMA-CA
-                        + t.Bool.true.serialize()  # mIsHeaderUpdated
-                        + t.Bool.false.serialize()  # mIsARetx
-                        + t.Bool.true.serialize()  # mIsSecurityProcessed
-                        + t.uint8_t(0).serialize()  # mTxDelay
-                        + t.uint8_t(0).serialize()  # mTxDelayBaseTime
-                        + t.uint8_t(
-                            self.state.network_info.channel
-                        ).serialize()  # RX channel after TX done
-                    ),
+            if attempt > 0:
+                _LOGGER.debug(
+                    "Sending frame %d, attempt %d: %s",
+                    frame_num,
+                    attempt + 1,
+                    frame,
                 )
-                delta = time.time() - start_time
+            else:
+                _LOGGER.debug("Sending frame %d: %s", frame_num, frame)
 
-                assert rsp_prop_id == PropertyID.LAST_STATUS
-                status_code = Status(rsp_data[0])
-                rest = rsp_data[1:]
+            data = frame.serialize()
 
-                if attempt > 0:
-                    _LOGGER.debug(
-                        "Spinel frame status for frame %d, attempt %d, after %0.4f: %r (%r)",
-                        frame_num,
-                        attempt + 1,
-                        delta,
-                        status_code,
-                        rest,
-                    )
-                else:
-                    _LOGGER.debug(
-                        "Spinel frame status for frame %d after %0.4f: %r (%r)",
-                        frame_num,
-                        delta,
-                        status_code,
-                        rest,
-                    )
-
-                if status_code == Status.NO_ACK:
-                    await asyncio.sleep(random.uniform(0, 0.1))
-                    continue
-
-                return status_code
-
-    async def _rx_loop(self):
-        _LOGGER.debug("In the RX loop!")
-        async for timestamp, frame, metadata in self._spinel.sniff():
-            _LOGGER.debug(
-                "There are %d more frames to pop!",
-                len(self._spinel._raw_frame_queue._queue),
+            start_time = time.time()
+            rsp_prop_id, rsp_data = await self._spinel.set_property(
+                PropertyID.STREAM_RAW,
+                (
+                    t.uint16_t(len(data)).serialize()
+                    + data
+                    + t.uint8_t(self.state.network_info.channel).serialize()
+                    + t.uint8_t(1).serialize()  # CCA backoff attempts
+                    + t.uint8_t(4).serialize()  # CCA retries
+                    + t.Bool.true.serialize()  # enable CSMA-CA
+                    + t.Bool.true.serialize()  # mIsHeaderUpdated
+                    + t.Bool.false.serialize()  # mIsARetx
+                    + t.Bool.true.serialize()  # mIsSecurityProcessed
+                    + t.uint8_t(0).serialize()  # mTxDelay
+                    + t.uint8_t(0).serialize()  # mTxDelayBaseTime
+                    + t.uint8_t(
+                        self.state.network_info.channel
+                    ).serialize()  # RX channel after TX done
+                ),
             )
-            try:
-                ieee_frame = zigbee.IEEE802154Frame.from_bytes(frame)
-                _LOGGER.debug("Parsed frame %s", ieee_frame)
+            delta = time.time() - start_time
 
-                if (
-                    ieee_frame.frame_control.frame_type
-                    != zigbee.IEEE802154FrameType.Data
-                ):
-                    _LOGGER.debug(
-                        "Ignoring frame, invalid type: %s",
-                        ieee_frame.frame_control.frame_type,
-                    )
-                    continue
+            assert rsp_prop_id == PropertyID.LAST_STATUS
+            status_code = Status(rsp_data[0])
+            rest = rsp_data[1:]
 
-                if ieee_frame.dest_pan_id != self.state.network_info.pan_id:
-                    _LOGGER.debug(
-                        "Ignoring frame, invalid PAN ID: %s", ieee_frame.dest_pan_id
-                    )
-                    continue
+            if attempt > 0:
+                _LOGGER.debug(
+                    "Spinel frame status for frame %d, attempt %d, after %0.4f: %r (%r)",
+                    frame_num,
+                    attempt + 1,
+                    delta,
+                    status_code,
+                    rest,
+                )
+            else:
+                _LOGGER.debug(
+                    "Spinel frame status for frame %d after %0.4f: %r (%r)",
+                    frame_num,
+                    delta,
+                    status_code,
+                    rest,
+                )
 
-                if (
-                    ieee_frame.frame_control.dest_addr_mode
-                    == zigbee.IEEE802154AddressingMode.Short
-                    and ieee_frame.dest_address < 0xFF00
-                    and ieee_frame.dest_address != self.state.node_info.nwk
-                ):
-                    continue
+            if status_code == Status.NO_ACK:
+                await asyncio.sleep(random.uniform(0, 0.1))
+                continue
 
-                zigbee_nwk_frame = zigbee.ZigbeeNwkFrame.from_bytes(ieee_frame.payload)
+            return status_code
 
-                if isinstance(zigbee_nwk_frame, zigbee.EncryptedZigbeeNwkFrame):
-                    decrypted_zigbee_nwk_frame = zigbee_nwk_frame.decrypt(
-                        self.state.network_info.network_key.key.serialize()
-                    )
-                else:
-                    decrypted_zigbee_nwk_frame = zigbee_nwk_frame
+    async def _spinel_packet_callback(self, _, value: bytes):
+        frame_len, data = zigpy.types.uint16_t.deserialize(value)
+        frame = data[:frame_len]
+        _metadata = data[frame_len:]
 
-                _LOGGER.debug("Parsed Zigbee %s", decrypted_zigbee_nwk_frame)
+        ieee_frame = zigbee.IEEE802154Frame.from_bytes(frame)
+        _LOGGER.debug("Parsed frame %s", ieee_frame)
 
-                if (
-                    decrypted_zigbee_nwk_frame.nwk_header.frame_control.frame_type
-                    == zigbee.ZigbeeNwkFrameType.Command
-                    and decrypted_zigbee_nwk_frame.payload[0] == 0x01
-                ):
-                    _LOGGER.debug("Received a route request")
-                    self.state.network_info.network_key.tx_counter += 1
-                    await self._send_spinel_frame(
-                        zigbee.IEEE802154Frame(
-                            frame_control=zigbee.IEEE802154FrameControl(
-                                frame_type=zigbee.IEEE802154FrameType.Data,
-                                security_enabled=False,
-                                frame_pending=False,
-                                ack_request=True,
-                                pan_id_compression=True,
-                                reserved=0b0,
-                                sequence_number_suppression=False,
-                                information_elements_present=False,
-                                dest_addr_mode=zigbee.IEEE802154AddressingMode.Short,
-                                frame_version=0b00,
-                                src_addr_mode=zigbee.IEEE802154AddressingMode.Short,
+        if ieee_frame.frame_control.frame_type != zigbee.IEEE802154FrameType.Data:
+            _LOGGER.debug(
+                "Ignoring frame, invalid type: %s",
+                ieee_frame.frame_control.frame_type,
+            )
+            return
+
+        if ieee_frame.dest_pan_id != self.state.network_info.pan_id:
+            _LOGGER.debug("Ignoring frame, invalid PAN ID: %s", ieee_frame.dest_pan_id)
+            return
+
+        if (
+            ieee_frame.frame_control.dest_addr_mode
+            == zigbee.IEEE802154AddressingMode.Short
+            and ieee_frame.dest_address < 0xFF00
+            and ieee_frame.dest_address != self.state.node_info.nwk
+        ):
+            return
+
+        zigbee_nwk_frame = zigbee.ZigbeeNwkFrame.from_bytes(ieee_frame.payload)
+
+        if isinstance(zigbee_nwk_frame, zigbee.EncryptedZigbeeNwkFrame):
+            decrypted_zigbee_nwk_frame = zigbee_nwk_frame.decrypt(
+                self.state.network_info.network_key.key.serialize()
+            )
+        else:
+            decrypted_zigbee_nwk_frame = zigbee_nwk_frame
+
+        _LOGGER.debug("Parsed Zigbee %s", decrypted_zigbee_nwk_frame)
+
+        if (
+            decrypted_zigbee_nwk_frame.nwk_header.frame_control.frame_type
+            == zigbee.ZigbeeNwkFrameType.Command
+            and decrypted_zigbee_nwk_frame.payload[0] == 0x01
+        ):
+            _LOGGER.debug("Received a route request")
+            self.state.network_info.network_key.tx_counter += 1
+            await self._send_spinel_frame(
+                zigbee.IEEE802154Frame(
+                    frame_control=zigbee.IEEE802154FrameControl(
+                        frame_type=zigbee.IEEE802154FrameType.Data,
+                        security_enabled=False,
+                        frame_pending=False,
+                        ack_request=True,
+                        pan_id_compression=True,
+                        reserved=0b0,
+                        sequence_number_suppression=False,
+                        information_elements_present=False,
+                        dest_addr_mode=zigbee.IEEE802154AddressingMode.Short,
+                        frame_version=0b00,
+                        src_addr_mode=zigbee.IEEE802154AddressingMode.Short,
+                    ),
+                    sequence_number=t.uint8_t(ieee_frame.sequence_number),
+                    dest_pan_id=ieee_frame.dest_pan_id,
+                    dest_address=ieee_frame.src_address,
+                    src_pan_id=None,
+                    src_address=ieee_frame.dest_address,
+                    payload=(
+                        zigbee.DecryptedZigbeeNwkFrame(
+                            nwk_header=zigbee.ZigbeeNwkHeader(
+                                frame_control=zigbee.ZigbeeNwkFrameControl(
+                                    frame_type=zigbee.ZigbeeNwkFrameType.Command,
+                                    protocol_version=2,
+                                    discover_route=zigbee.ZigbeeNwkRouteDiscovery.Suppress,
+                                    multicast=False,
+                                    security=True,
+                                    source_route=False,
+                                    destination=True,
+                                    extended_source=True,
+                                    end_device_initiator=False,
+                                    reserved=0b00,
+                                ),
+                                destination=zigbee_nwk_frame.nwk_header.source,
+                                source=self.state.node_info.nwk,
+                                radius=t.uint8_t(30),
+                                sequence_number=zigbee_nwk_frame.nwk_header.sequence_number,
+                                destination_ieee=zigbee_nwk_frame.nwk_header.source_ieee,
+                                source_ieee=self.state.node_info.ieee,
+                                multicast_control=None,
+                                source_route_relay_index=None,
+                                source_route=None,
                             ),
-                            sequence_number=t.uint8_t(ieee_frame.sequence_number),
-                            dest_pan_id=ieee_frame.dest_pan_id,
-                            dest_address=ieee_frame.src_address,
-                            src_pan_id=None,
-                            src_address=ieee_frame.dest_address,
+                            aux_header=zigbee.ZigbeeNwkAuxHeader(
+                                security_control=zigbee.ZigbeeNwkSecurityHeaderControlField(
+                                    security_level=0,
+                                    key_id=zigbee.ZigbeeNwkSecurityHeaderKeyId.NetworkKey,
+                                    extended_nonce=True,
+                                    reserved=0b00,
+                                ),
+                                frame_counter=t.uint32_t(
+                                    self.state.network_info.network_key.tx_counter
+                                ),
+                                extended_source=self.state.node_info.ieee,
+                                key_sequence_number=t.uint8_t(
+                                    self.state.network_info.network_key.seq
+                                ),
+                            ),
                             payload=(
-                                zigbee.DecryptedZigbeeNwkFrame(
-                                    nwk_header=zigbee.ZigbeeNwkHeader(
-                                        frame_control=zigbee.ZigbeeNwkFrameControl(
-                                            frame_type=zigbee.ZigbeeNwkFrameType.Command,
-                                            protocol_version=2,
-                                            discover_route=zigbee.ZigbeeNwkRouteDiscovery.Suppress,
-                                            multicast=False,
-                                            security=True,
-                                            source_route=False,
-                                            destination=True,
-                                            extended_source=True,
-                                            end_device_initiator=False,
-                                            reserved=0b00,
-                                        ),
-                                        destination=zigbee_nwk_frame.nwk_header.source,
-                                        source=self.state.node_info.nwk,
-                                        radius=t.uint8_t(30),
-                                        sequence_number=zigbee_nwk_frame.nwk_header.sequence_number,
-                                        destination_ieee=zigbee_nwk_frame.nwk_header.source_ieee,
-                                        source_ieee=self.state.node_info.ieee,
-                                        multicast_control=None,
-                                        source_route_relay_index=None,
-                                        source_route=None,
-                                    ),
-                                    aux_header=zigbee.ZigbeeNwkAuxHeader(
-                                        security_control=zigbee.ZigbeeNwkSecurityHeaderControlField(
-                                            security_level=0,
-                                            key_id=zigbee.ZigbeeNwkSecurityHeaderKeyId.NetworkKey,
-                                            extended_nonce=True,
-                                            reserved=0b00,
-                                        ),
-                                        frame_counter=t.uint32_t(
-                                            self.state.network_info.network_key.tx_counter
-                                        ),
-                                        extended_source=self.state.node_info.ieee,
-                                        key_sequence_number=t.uint8_t(
-                                            self.state.network_info.network_key.seq
-                                        ),
-                                    ),
-                                    payload=(
-                                        bytes([0x02, 0x00, 0x12])
-                                        + self.state.node_info.nwk.serialize()
-                                        + self.state.node_info.nwk.serialize()
-                                        + t.uint8_t(1).serialize()
-                                    ),
-                                )
-                                .encrypt(
-                                    self.state.network_info.network_key.key.serialize()
-                                )
-                                .serialize()
+                                bytes([0x02, 0x00, 0x12])
+                                + self.state.node_info.nwk.serialize()
+                                + self.state.node_info.nwk.serialize()
+                                + t.uint8_t(1).serialize()
                             ),
-                            fcs=None,
                         )
-                    )
-
-                    continue
-
-                if (
-                    decrypted_zigbee_nwk_frame.nwk_header.frame_control.frame_type
-                    != zigbee.ZigbeeNwkFrameType.Data
-                ):
-                    continue
-
-                zigbee_aps_frame = zigbee.ZigbeeApsFrame.from_bytes(
-                    decrypted_zigbee_nwk_frame.payload
-                )
-
-                if (
-                    zigbee_aps_frame.frame_control.frame_type
-                    != zigbee.ZigbeeApsFrameType.Data
-                ):
-                    continue
-
-                if zigbee_aps_frame.frame_control.ack_request:
-                    _LOGGER.debug("Sending an APS ACK")
-                    self.state.network_info.network_key.tx_counter += 1
-                    await self._send_spinel_frame(
-                        zigbee.IEEE802154Frame(
-                            frame_control=zigbee.IEEE802154FrameControl(
-                                frame_type=zigbee.IEEE802154FrameType.Data,
-                                security_enabled=False,
-                                frame_pending=False,
-                                ack_request=True,
-                                pan_id_compression=True,
-                                reserved=0b0,
-                                sequence_number_suppression=False,
-                                information_elements_present=False,
-                                dest_addr_mode=zigbee.IEEE802154AddressingMode.Short,
-                                frame_version=0b00,
-                                src_addr_mode=zigbee.IEEE802154AddressingMode.Short,
-                            ),
-                            sequence_number=t.uint8_t(ieee_frame.sequence_number),
-                            dest_pan_id=ieee_frame.dest_pan_id,
-                            dest_address=ieee_frame.src_address,
-                            src_pan_id=None,
-                            src_address=ieee_frame.dest_address,
-                            payload=(
-                                zigbee.DecryptedZigbeeNwkFrame(
-                                    nwk_header=zigbee.ZigbeeNwkHeader(
-                                        frame_control=zigbee.ZigbeeNwkFrameControl(
-                                            frame_type=zigbee.ZigbeeNwkFrameType.Data,
-                                            protocol_version=2,
-                                            discover_route=zigbee.ZigbeeNwkRouteDiscovery.Suppress,
-                                            multicast=False,
-                                            security=True,
-                                            source_route=False,
-                                            destination=False,
-                                            extended_source=False,
-                                            end_device_initiator=False,
-                                            reserved=0b00,
-                                        ),
-                                        destination=zigbee_nwk_frame.nwk_header.source,
-                                        source=zigbee_nwk_frame.nwk_header.destination,
-                                        radius=t.uint8_t(
-                                            zigbee_nwk_frame.nwk_header.radius - 1
-                                        ),
-                                        sequence_number=zigbee_nwk_frame.nwk_header.sequence_number,
-                                        destination_ieee=None,
-                                        source_ieee=None,
-                                        multicast_control=None,
-                                        source_route_relay_index=None,
-                                        source_route=None,
-                                    ),
-                                    aux_header=zigbee.ZigbeeNwkAuxHeader(
-                                        security_control=zigbee.ZigbeeNwkSecurityHeaderControlField(
-                                            security_level=0,
-                                            key_id=zigbee.ZigbeeNwkSecurityHeaderKeyId.NetworkKey,
-                                            extended_nonce=True,
-                                            reserved=0b00,
-                                        ),
-                                        frame_counter=t.uint32_t(
-                                            self.state.network_info.network_key.tx_counter
-                                        ),
-                                        extended_source=self.state.node_info.ieee,
-                                        key_sequence_number=t.uint8_t(
-                                            self.state.network_info.network_key.seq
-                                        ),
-                                    ),
-                                    payload=zigbee.ZigbeeApsFrame(
-                                        frame_control=zigbee.ZigbeeApsFrameControl(
-                                            frame_type=zigbee.ZigbeeApsFrameType.Ack,
-                                            delivery_mode=zigbee.ZigbeeApsDeliveryMode.Unicast,
-                                            reserved=0,
-                                            security=0,
-                                            ack_request=0,
-                                            extended_header=0,
-                                        ),
-                                        destination_endpoint=zigbee_aps_frame.source_endpoint,
-                                        cluster_id=zigbee_aps_frame.cluster_id,
-                                        profile_id=zigbee_aps_frame.profile_id,
-                                        source_endpoint=zigbee_aps_frame.destination_endpoint,
-                                        counter=zigbee_aps_frame.counter,
-                                        asdu=b"",
-                                    ).serialize(),
-                                )
-                                .encrypt(
-                                    self.state.network_info.network_key.key.serialize()
-                                )
-                                .serialize()
-                            ),
-                            fcs=None,
-                        ),
-                        attempts=1,
-                    )
-
-                packet = t.ZigbeePacket(
-                    src=t.AddrModeAddress(
-                        addr_mode=t.AddrMode.NWK,
-                        address=decrypted_zigbee_nwk_frame.nwk_header.source,
+                        .encrypt(self.state.network_info.network_key.key.serialize())
+                        .serialize()
                     ),
-                    src_ep=zigbee_aps_frame.source_endpoint,
-                    dst=t.AddrModeAddress(
-                        addr_mode=t.AddrMode.NWK,
-                        address=decrypted_zigbee_nwk_frame.nwk_header.destination,
-                    ),
-                    dst_ep=zigbee_aps_frame.destination_endpoint,
-                    tsn=zigbee_aps_frame.counter,
-                    profile_id=zigbee_aps_frame.profile_id,
-                    cluster_id=zigbee_aps_frame.cluster_id,
-                    data=t.SerializableBytes(zigbee_aps_frame.asdu),
-                    tx_options=t.TransmitOptions.NONE,
-                    radius=decrypted_zigbee_nwk_frame.nwk_header.radius,
-                    lqi=0,
-                    rssi=0,
+                    fcs=None,
                 )
-                _LOGGER.info("Received a packet %s", packet)
+            )
 
-                self.packet_received(packet)
-            except Exception as exc:
-                _LOGGER.error("oops: %r", exc, exc_info=True)
+            return
+
+        if (
+            decrypted_zigbee_nwk_frame.nwk_header.frame_control.frame_type
+            != zigbee.ZigbeeNwkFrameType.Data
+        ):
+            return
+
+        zigbee_aps_frame = zigbee.ZigbeeApsFrame.from_bytes(
+            decrypted_zigbee_nwk_frame.payload
+        )
+
+        if zigbee_aps_frame.frame_control.frame_type != zigbee.ZigbeeApsFrameType.Data:
+            return
+
+        if zigbee_aps_frame.frame_control.ack_request:
+            _LOGGER.debug("Sending an APS ACK")
+            self.state.network_info.network_key.tx_counter += 1
+            await self._send_spinel_frame(
+                zigbee.IEEE802154Frame(
+                    frame_control=zigbee.IEEE802154FrameControl(
+                        frame_type=zigbee.IEEE802154FrameType.Data,
+                        security_enabled=False,
+                        frame_pending=False,
+                        ack_request=True,
+                        pan_id_compression=True,
+                        reserved=0b0,
+                        sequence_number_suppression=False,
+                        information_elements_present=False,
+                        dest_addr_mode=zigbee.IEEE802154AddressingMode.Short,
+                        frame_version=0b00,
+                        src_addr_mode=zigbee.IEEE802154AddressingMode.Short,
+                    ),
+                    sequence_number=t.uint8_t(ieee_frame.sequence_number),
+                    dest_pan_id=ieee_frame.dest_pan_id,
+                    dest_address=ieee_frame.src_address,
+                    src_pan_id=None,
+                    src_address=ieee_frame.dest_address,
+                    payload=(
+                        zigbee.DecryptedZigbeeNwkFrame(
+                            nwk_header=zigbee.ZigbeeNwkHeader(
+                                frame_control=zigbee.ZigbeeNwkFrameControl(
+                                    frame_type=zigbee.ZigbeeNwkFrameType.Data,
+                                    protocol_version=2,
+                                    discover_route=zigbee.ZigbeeNwkRouteDiscovery.Suppress,
+                                    multicast=False,
+                                    security=True,
+                                    source_route=False,
+                                    destination=False,
+                                    extended_source=False,
+                                    end_device_initiator=False,
+                                    reserved=0b00,
+                                ),
+                                destination=zigbee_nwk_frame.nwk_header.source,
+                                source=zigbee_nwk_frame.nwk_header.destination,
+                                radius=t.uint8_t(
+                                    zigbee_nwk_frame.nwk_header.radius - 1
+                                ),
+                                sequence_number=zigbee_nwk_frame.nwk_header.sequence_number,
+                                destination_ieee=None,
+                                source_ieee=None,
+                                multicast_control=None,
+                                source_route_relay_index=None,
+                                source_route=None,
+                            ),
+                            aux_header=zigbee.ZigbeeNwkAuxHeader(
+                                security_control=zigbee.ZigbeeNwkSecurityHeaderControlField(
+                                    security_level=0,
+                                    key_id=zigbee.ZigbeeNwkSecurityHeaderKeyId.NetworkKey,
+                                    extended_nonce=True,
+                                    reserved=0b00,
+                                ),
+                                frame_counter=t.uint32_t(
+                                    self.state.network_info.network_key.tx_counter
+                                ),
+                                extended_source=self.state.node_info.ieee,
+                                key_sequence_number=t.uint8_t(
+                                    self.state.network_info.network_key.seq
+                                ),
+                            ),
+                            payload=zigbee.ZigbeeApsFrame(
+                                frame_control=zigbee.ZigbeeApsFrameControl(
+                                    frame_type=zigbee.ZigbeeApsFrameType.Ack,
+                                    delivery_mode=zigbee.ZigbeeApsDeliveryMode.Unicast,
+                                    reserved=0,
+                                    security=0,
+                                    ack_request=0,
+                                    extended_header=0,
+                                ),
+                                destination_endpoint=zigbee_aps_frame.source_endpoint,
+                                cluster_id=zigbee_aps_frame.cluster_id,
+                                profile_id=zigbee_aps_frame.profile_id,
+                                source_endpoint=zigbee_aps_frame.destination_endpoint,
+                                counter=zigbee_aps_frame.counter,
+                                asdu=b"",
+                            ).serialize(),
+                        )
+                        .encrypt(self.state.network_info.network_key.key.serialize())
+                        .serialize()
+                    ),
+                    fcs=None,
+                ),
+                attempts=1,
+            )
+
+        packet = t.ZigbeePacket(
+            src=t.AddrModeAddress(
+                addr_mode=t.AddrMode.NWK,
+                address=decrypted_zigbee_nwk_frame.nwk_header.source,
+            ),
+            src_ep=zigbee_aps_frame.source_endpoint,
+            dst=t.AddrModeAddress(
+                addr_mode=t.AddrMode.NWK,
+                address=decrypted_zigbee_nwk_frame.nwk_header.destination,
+            ),
+            dst_ep=zigbee_aps_frame.destination_endpoint,
+            tsn=zigbee_aps_frame.counter,
+            profile_id=zigbee_aps_frame.profile_id,
+            cluster_id=zigbee_aps_frame.cluster_id,
+            data=t.SerializableBytes(zigbee_aps_frame.asdu),
+            tx_options=t.TransmitOptions.NONE,
+            radius=decrypted_zigbee_nwk_frame.nwk_header.radius,
+            lqi=0,
+            rssi=0,
+        )
+        _LOGGER.info("Received a packet %s", packet)
+
+        self.packet_received(packet)
 
     async def permit_ncp(self, time_s: int = 60) -> None:
-        pass
+        if time_s == 0:
+            self._reset_permit_ncp()
+            return
+
+        if self._permit_reset_task is not None:
+            self._permit_reset_task.cancel()
+            self._permit_reset_task = None
+
+        self._permitting_joins = True
+        self._permit_reset_task = asyncio.get_running_loop().call_later(
+            time_s, self._reset_permit_ncp
+        )
+
+    def _reset_permit_ncp(self):
+        self._permitting_joins = False
+        self._permit_reset_task = None
 
     async def permit_with_link_key(
         self, node: t.EUI64, link_key: t.KeyData, time_s: int = 60

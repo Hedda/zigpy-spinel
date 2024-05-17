@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import datetime
 import logging
-import time
 import typing
+from collections import defaultdict
 
 import async_timeout
-import zigpy.types
 
 from .common import SerialProtocol, Version
 from .spinel_types import (
@@ -20,6 +18,7 @@ from .spinel_types import (
     HDLCLiteFrame,
     SpinelHeader,
     SpinelFrame,
+    Status,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,7 +29,7 @@ class SpinelProtocol(SerialProtocol):
         super().__init__()
         self._transaction_id: int = 1
         self._pending_frames: dict[int, asyncio.Future] = {}
-        self._raw_frame_queue = asyncio.Queue()
+        self._property_listeners: defaultdict[PropertyID, list[typing.callable]] = {}
 
     def data_received(self, data: bytes) -> None:
         super().data_received(data)
@@ -72,19 +71,21 @@ class SpinelProtocol(SerialProtocol):
 
         if frame.header.transaction_id in self._pending_frames:
             self._pending_frames[frame.header.transaction_id].set_result(frame)
-        else:
-            if (
-                frame.command_id == CommandID.PROP_VALUE_IS
-                and frame.data[0] == PropertyID.STREAM_RAW
-            ):
-                frame_len, data = zigpy.types.uint16_t.deserialize(frame.data[1:])
-                frame = data[:frame_len]
-                metadata = data[frame_len:]
 
-                _LOGGER.debug("Enqueueing frame...")
-                self._raw_frame_queue.put_nowait(
-                    (datetime.datetime.now(datetime.timezone.utc), frame, metadata)
-                )
+        if frame.command_id == CommandID.PROP_VALUE_IS:
+            prop_id, data = PackedUInt21.deserialize(frame.data)
+            prop_id = PropertyID(prop_id)
+
+            for listener in self._property_listeners[prop_id]:
+                try:
+                    listener(data)
+                except Exception:
+                    _LOGGER.warning(
+                        "Error calling property listener for %r: %r",
+                        prop_id,
+                        listener,
+                        exc_info=True,
+                    )
 
     @typing.overload
     async def send_frame(
@@ -134,8 +135,6 @@ class SpinelProtocol(SerialProtocol):
             self.send_data(HDLCLiteFrame(data=new_frame.serialize()).serialize())
             return None
 
-        start = time.time()
-
         try:
             for attempt in range(retries + 1):
                 _LOGGER.debug("Sending frame %r", new_frame)
@@ -159,8 +158,6 @@ class SpinelProtocol(SerialProtocol):
                     await asyncio.sleep(retry_delay)
         finally:
             self._pending_frames.pop(tid, None)
-            delta = time.time() - start
-            _LOGGER.debug("Frame %r took %0.2fs", frame, delta)
 
         raise AssertionError("Unreachable")
 
@@ -197,21 +194,7 @@ class SpinelProtocol(SerialProtocol):
         return Version(short_version)
 
     async def enter_bootloader(self) -> None:
-        await self.send_command(
-            CommandID.RESET,
-            ResetReason.BOOTLOADER.serialize(),
-            wait_response=False,
-        )
-
-        # A small delay is necessary when switching baudrates
-        await asyncio.sleep(0.5)
-
-    async def sniff(
-        self,
-    ) -> typing.AsyncGenerator[typing.Tuple[datetime.datetime, bytes, bytes], None]:
-        while True:
-            timestamp, frame, metadata = await self._raw_frame_queue.get()
-            yield timestamp, frame, metadata
+        await self.reset(ResetReason.BOOTLOADER)
 
     async def set_property(
         self, property_id: PropertyID, value, *, timeout=1
@@ -234,3 +217,51 @@ class SpinelProtocol(SerialProtocol):
         )
 
         return rsp_prop_id, rest
+
+    def add_property_listener(
+        self, property_id: PropertyID, callback: typing.Callable
+    ) -> None:
+        self._property_listeners[property_id].append(callback)
+
+    def remove_property_listener(
+        self, property_id: PropertyID, callback: typing.Callable
+    ) -> None:
+        self._property_listeners[property_id].remove(callback)
+
+    async def iter_property_changes(
+        self, property_id: PropertyID
+    ) -> typing.AsyncIterator:
+        queue = asyncio.Queue()
+
+        try:
+            self.add_property_listener(property_id, queue.put_nowait)
+
+            while True:
+                item = await queue.get()
+                yield item
+        finally:
+            self.remove_property_listener(property_id, queue.put_nowait)
+
+    async def wait_for_property(self, property_id: PropertyID, value: bytes) -> None:
+        async for value in self.iter_property_changes(property_id):
+            if value == value:
+                return
+
+    async def reset(
+        self,
+        reset_type: ResetReason = ResetReason.STACK,
+    ) -> None:
+        await self.send_command(
+            CommandID.RESET,
+            reset_type.serialize(),
+            wait_response=False,
+        )
+
+        if reset_type == ResetReason.BOOTLOADER:
+            # A small delay is necessary when switching baudrates
+            await asyncio.sleep(0.5)
+            return
+
+        await self.wait_for_property(
+            PropertyID.LAST_STATUS, Status.RESET_SOFTWARE.serialize()
+        )

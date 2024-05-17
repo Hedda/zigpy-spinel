@@ -253,7 +253,15 @@ class Status(zigpy.types.enum8):
     NOT_CAPABLE = 23  # The target is not capable of handling requested operation.
     RESPONSE_TIMEOUT = 24  # No response received from remote node
 
-    UNK = 70
+    RESET_POWER_ON = 112
+    RESET_EXTERNAL = 113
+    RESET_SOFTWARE = 114
+    RESET_FAULT = 115
+    RESET_CRASH = 116
+    RESET_ASSERT = 117
+    RESET_OTHER = 118
+    RESET_UNKNOWN = 119
+    RESET_WATCHDOG = 120
 
 
 @dataclasses.dataclass(frozen=True)
