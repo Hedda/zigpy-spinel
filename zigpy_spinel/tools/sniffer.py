@@ -7,6 +7,7 @@ from ..common import connect_protocol
 from ..spinel import SpinelProtocol
 from ..spinel_types import CommandID, PropertyID
 
+
 def ieee_15_4_fcs(data: bytes) -> bytes:
     # Modified from the implementation in `scapy.layers.dot15d4:Dot15d4FCS.compute_fcs`
     crc = 0x0000
@@ -19,6 +20,7 @@ def ieee_15_4_fcs(data: bytes) -> bytes:
         crc = (crc // 16) ^ (q * 0x1081)
 
     return crc.to_bytes(2, "little")
+
 
 class PcapWriter:
     """Class responsible to write in pcap format."""
@@ -49,10 +51,9 @@ class PcapWriter:
         self.fdesc.write(packet_bytes)
         self.fdesc.flush()
 
+
 async def main():
-    async with connect_protocol(
-        sys.argv[1], 460800, SpinelProtocol
-    ) as spinel:
+    async with connect_protocol(sys.argv[1], 460800, SpinelProtocol) as spinel:
         await spinel.probe()
         await spinel.send_command(CommandID.RESET, b"", wait_response=False)
         await asyncio.sleep(2)
@@ -63,17 +64,25 @@ async def main():
             pcap_writer.write_header(195)  # LINKTYPE_IEEE802_15_4
 
             await spinel.set_property(PropertyID.PHY_ENABLED, zigpy.types.uint8_t(1))
-            await spinel.set_property(PropertyID.MAC_PROMISCUOUS_MODE, zigpy.types.uint8_t(2))
-            await spinel.set_property(PropertyID.MAC_RAW_STREAM_ENABLED, zigpy.types.Bool.true)
-            await spinel.set_property(PropertyID.PHY_CHAN, zigpy.types.uint8_t(int(sys.argv[2])))
+            await spinel.set_property(
+                PropertyID.MAC_PROMISCUOUS_MODE, zigpy.types.uint8_t(2)
+            )
+            await spinel.set_property(
+                PropertyID.MAC_RAW_STREAM_ENABLED, zigpy.types.Bool.true
+            )
+            await spinel.set_property(
+                PropertyID.PHY_CHAN, zigpy.types.uint8_t(int(sys.argv[2]))
+            )
 
             async for timestamp, frame, metadata in spinel.sniff():
                 # Recompute the FCS
                 frame = frame[:-2] + ieee_15_4_fcs(frame[:-2])
                 pcap_writer.write_packet(frame, timestamp)
 
+
 if __name__ == "__main__":
     import coloredlogs
+
     coloredlogs.install()
 
     asyncio.run(main())

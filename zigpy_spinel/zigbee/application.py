@@ -47,7 +47,9 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         _LOGGER.debug("READY???????????")
 
     async def disconnect(self):
-        pathlib.Path("frame_counter.json").write_text(str(self.state.network_info.network_key.tx_counter))
+        pathlib.Path("frame_counter.json").write_text(
+            str(self.state.network_info.network_key.tx_counter)
+        )
 
         if self._spinel is not None:
             self._spinel.disconnect()
@@ -59,7 +61,9 @@ class ControllerApplication(zigpy.application.ControllerApplication):
     async def start_network(self):
         _LOGGER.info("Started network!")
 
-        coordinator = self.add_device(nwk=self.state.node_info.nwk, ieee=self.state.node_info.ieee)
+        coordinator = self.add_device(
+            nwk=self.state.node_info.nwk, ieee=self.state.node_info.ieee
+        )
         coordinator.model = "OpenThread RCP"
         coordinator.manufacturer = "Zigpy"
         coordinator.node_desc = zdo_t.NodeDescriptor(
@@ -89,12 +93,20 @@ class ControllerApplication(zigpy.application.ControllerApplication):
         await asyncio.sleep(3)
 
         await self._spinel.set_property(PropertyID.PHY_ENABLED, t.uint8_t(1))
-        await self._spinel.set_property(PropertyID.MAC_15_4_LADDR, self.state.node_info.ieee)
-        await self._spinel.set_property(PropertyID.MAC_15_4_SADDR, self.state.node_info.nwk)
-        await self._spinel.set_property(PropertyID.MAC_15_4_PANID, self.state.network_info.pan_id)
-        #await self._spinel.set_property(PropertyID.MAC_PROMISCUOUS_MODE, t.uint8_t(1))
+        await self._spinel.set_property(
+            PropertyID.MAC_15_4_LADDR, self.state.node_info.ieee
+        )
+        await self._spinel.set_property(
+            PropertyID.MAC_15_4_SADDR, self.state.node_info.nwk
+        )
+        await self._spinel.set_property(
+            PropertyID.MAC_15_4_PANID, self.state.network_info.pan_id
+        )
+        # await self._spinel.set_property(PropertyID.MAC_PROMISCUOUS_MODE, t.uint8_t(1))
         await self._spinel.set_property(PropertyID.MAC_RAW_STREAM_ENABLED, t.Bool.true)
-        await self._spinel.set_property(PropertyID.PHY_CHAN, t.uint8_t(self.state.network_info.channel))
+        await self._spinel.set_property(
+            PropertyID.PHY_CHAN, t.uint8_t(self.state.network_info.channel)
+        )
 
         self._rx_task = asyncio.create_task(self._rx_loop())
         await asyncio.sleep(1)
@@ -203,7 +215,12 @@ class ControllerApplication(zigpy.application.ControllerApplication):
                 frame_num = self._frame_ctr
 
                 if attempt > 0:
-                    _LOGGER.debug("Sending frame %d, attempt %d: %s", frame_num, attempt + 1, frame)
+                    _LOGGER.debug(
+                        "Sending frame %d, attempt %d: %s",
+                        frame_num,
+                        attempt + 1,
+                        frame,
+                    )
                 else:
                     _LOGGER.debug("Sending frame %d: %s", frame_num, frame)
 
@@ -218,13 +235,15 @@ class ControllerApplication(zigpy.application.ControllerApplication):
                         + t.uint8_t(self.state.network_info.channel).serialize()
                         + t.uint8_t(1).serialize()  # CCA backoff attempts
                         + t.uint8_t(4).serialize()  # CCA retries
-                        + t.Bool.true.serialize()   # enable CSMA-CA
-                        + t.Bool.true.serialize()   # mIsHeaderUpdated
+                        + t.Bool.true.serialize()  # enable CSMA-CA
+                        + t.Bool.true.serialize()  # mIsHeaderUpdated
                         + t.Bool.false.serialize()  # mIsARetx
-                        + t.Bool.true.serialize()   # mIsSecurityProcessed
+                        + t.Bool.true.serialize()  # mIsSecurityProcessed
                         + t.uint8_t(0).serialize()  # mTxDelay
                         + t.uint8_t(0).serialize()  # mTxDelayBaseTime
-                        + t.uint8_t(self.state.network_info.channel).serialize()  # RX channel after TX done
+                        + t.uint8_t(
+                            self.state.network_info.channel
+                        ).serialize()  # RX channel after TX done
                     ),
                 )
                 delta = time.time() - start_time
@@ -233,11 +252,23 @@ class ControllerApplication(zigpy.application.ControllerApplication):
                 status_code = Status(rsp_data[0])
                 rest = rsp_data[1:]
 
-
                 if attempt > 0:
-                    _LOGGER.debug("Spinel frame status for frame %d, attempt %d, after %0.4f: %r (%r)", frame_num, attempt + 1, delta, status_code, rest)
+                    _LOGGER.debug(
+                        "Spinel frame status for frame %d, attempt %d, after %0.4f: %r (%r)",
+                        frame_num,
+                        attempt + 1,
+                        delta,
+                        status_code,
+                        rest,
+                    )
                 else:
-                    _LOGGER.debug("Spinel frame status for frame %d after %0.4f: %r (%r)", frame_num, delta, status_code, rest)
+                    _LOGGER.debug(
+                        "Spinel frame status for frame %d after %0.4f: %r (%r)",
+                        frame_num,
+                        delta,
+                        status_code,
+                        rest,
+                    )
 
                 if status_code == Status.NO_ACK:
                     await asyncio.sleep(random.uniform(0, 0.1))
@@ -248,7 +279,10 @@ class ControllerApplication(zigpy.application.ControllerApplication):
     async def _rx_loop(self):
         _LOGGER.debug("In the RX loop!")
         async for timestamp, frame, metadata in self._spinel.sniff():
-            _LOGGER.debug("There are %d more frames to pop!", len(self._spinel._raw_frame_queue._queue))
+            _LOGGER.debug(
+                "There are %d more frames to pop!",
+                len(self._spinel._raw_frame_queue._queue),
+            )
             try:
                 ieee_frame = zigbee.IEEE802154Frame.from_bytes(frame)
                 _LOGGER.debug("Parsed frame %s", ieee_frame)
@@ -477,7 +511,8 @@ class ControllerApplication(zigpy.application.ControllerApplication):
                                 .serialize()
                             ),
                             fcs=None,
-                        ), attempts=1,
+                        ),
+                        attempts=1,
                     )
 
                 packet = t.ZigbeePacket(

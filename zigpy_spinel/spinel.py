@@ -11,7 +11,16 @@ import async_timeout
 import zigpy.types
 
 from .common import SerialProtocol, Version
-from .spinel_types import CommandID, HDLCSpecial, PropertyID, ResetReason, PackedUInt21, HDLCLiteFrame, SpinelHeader, SpinelFrame
+from .spinel_types import (
+    CommandID,
+    HDLCSpecial,
+    PropertyID,
+    ResetReason,
+    PackedUInt21,
+    HDLCLiteFrame,
+    SpinelHeader,
+    SpinelFrame,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,8 +95,7 @@ class SpinelProtocol(SerialProtocol):
         retries: int,
         timeout: float,
         retry_delay: float,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @typing.overload
     async def send_frame(
@@ -98,8 +106,7 @@ class SpinelProtocol(SerialProtocol):
         retries: int,
         timeout: float,
         retry_delay: float,
-    ) -> SpinelFrame:
-        ...
+    ) -> SpinelFrame: ...
 
     async def send_frame(
         self,
@@ -199,12 +206,16 @@ class SpinelProtocol(SerialProtocol):
         # A small delay is necessary when switching baudrates
         await asyncio.sleep(0.5)
 
-    async def sniff(self) -> typing.AsyncGenerator[typing.Tuple[datetime.datetime, bytes, bytes], None]:
+    async def sniff(
+        self,
+    ) -> typing.AsyncGenerator[typing.Tuple[datetime.datetime, bytes, bytes], None]:
         while True:
             timestamp, frame, metadata = await self._raw_frame_queue.get()
             yield timestamp, frame, metadata
 
-    async def set_property(self, property_id: PropertyID, value, *, timeout=1) -> tuple[PropertyID, bytes]:
+    async def set_property(
+        self, property_id: PropertyID, value, *, timeout=1
+    ) -> tuple[PropertyID, bytes]:
         orig_value = value
 
         if not isinstance(value, bytes):
@@ -218,6 +229,8 @@ class SpinelProtocol(SerialProtocol):
 
         rsp_prop_id, rest = PackedUInt21.deserialize(rsp.data)
         rsp_prop_id = PropertyID(rsp_prop_id)
-        _LOGGER.info("Setting %s=%s, result %s=%r", property_id, orig_value, rsp_prop_id, rest)
+        _LOGGER.info(
+            "Setting %s=%s, result %s=%r", property_id, orig_value, rsp_prop_id, rest
+        )
 
         return rsp_prop_id, rest
