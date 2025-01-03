@@ -1,0 +1,357 @@
+#![allow(dead_code)]
+
+use std::convert::TryFrom;
+
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub enum FrameType {
+    Beacon = 0b000,
+    Data = 0b001,
+    Command = 0b011,
+    Ack = 0b010,
+}
+
+impl TryFrom<u8> for FrameType {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0b000 => Ok(FrameType::Beacon),
+            0b001 => Ok(FrameType::Data),
+            0b011 => Ok(FrameType::Command),
+            0b010 => Ok(FrameType::Ack),
+            _ => Err("Invalid frame type"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub enum AddressingMode {
+    None = 0b00,
+    Short = 0b10,
+    Long = 0b11,
+}
+
+impl TryFrom<u8> for AddressingMode {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0b00 => Ok(AddressingMode::None),
+            0b10 => Ok(AddressingMode::Short),
+            0b11 => Ok(AddressingMode::Long),
+            _ => Err("Invalid addressing mode"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct FrameControl {
+    pub frame_type: FrameType,
+    pub security_enabled: bool,
+    pub frame_pending: bool,
+    pub ack_request: bool,
+    pub pan_id_compression: bool,
+    pub reserved: bool,
+    pub sequence_number_suppression: bool,
+    pub information_elements_present: bool,
+    pub dest_addr_mode: AddressingMode,
+    pub frame_version: u8,
+    pub src_addr_mode: AddressingMode,
+}
+
+impl FrameControl {
+    pub fn deserialize(bytes: &[u8]) -> Result<(Self, &[u8]), &'static str> {
+        if bytes.len() < 2 {
+            return Err("Not enough data to parse FrameControl");
+        }
+
+        Ok(
+            (Self {
+                frame_type: FrameType::try_from(bytes[0] & 0b0000_0111)?,
+                security_enabled: (bytes[0] & 0b0000_1000) != 0,
+                frame_pending: (bytes[0] & 0b0001_0000) != 0,
+                ack_request: (bytes[0] & 0b0010_0000) != 0,
+                pan_id_compression: (bytes[0] & 0b0100_0000) != 0,
+                reserved: (bytes[0] & 0b1000_0000) != 0,
+                sequence_number_suppression: (bytes[1] & 0b0000_0001) != 0,
+                information_elements_present: (bytes[1] & 0b0000_0010) != 0,
+                dest_addr_mode: AddressingMode::try_from((bytes[1] >> 2) & 0b0000_0011)?,
+                frame_version: (bytes[1] >> 4) & 0b0000_0011,
+                src_addr_mode: AddressingMode::try_from((bytes[1] >> 6) & 0b0000_0011)?,
+            }, &bytes[2..])
+        )
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        bytes.push(
+              ((self.frame_type as u8) << 0)
+            | ((self.security_enabled as u8) << 3)
+            | ((self.frame_pending as u8) << 4)
+            | ((self.ack_request as u8) << 5)
+            | ((self.pan_id_compression as u8) << 6)
+            | ((self.reserved as u8) << 7),
+        );
+
+        bytes.push(
+              ((self.sequence_number_suppression as u8) << 0)
+            | ((self.information_elements_present as u8) << 1)
+            | ((self.dest_addr_mode as u8) << 2)
+            | ((self.frame_version as u8) << 4)
+            | ((self.src_addr_mode as u8) << 6),
+        );
+
+        bytes
+    }
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub enum CommandId {
+    NotAMacCommand = 0x00,
+    AssociationRequest = 0x01,
+    AssociationResponse = 0x02,
+    DisassociationNotification = 0x03,
+    DataRequest = 0x04,
+    PanIdConflictNotification = 0x05,
+    OrphanNotification = 0x06,
+    BeaconRequest = 0x07,
+    CoordinatorRealignment = 0x08,
+    GtsRequest = 0x09,
+}
+
+impl TryFrom<u8> for CommandId {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(CommandId::NotAMacCommand),
+            0x01 => Ok(CommandId::AssociationRequest),
+            0x02 => Ok(CommandId::AssociationResponse),
+            0x03 => Ok(CommandId::DisassociationNotification),
+            0x04 => Ok(CommandId::DataRequest),
+            0x05 => Ok(CommandId::PanIdConflictNotification),
+            0x06 => Ok(CommandId::OrphanNotification),
+            0x07 => Ok(CommandId::BeaconRequest),
+            0x08 => Ok(CommandId::CoordinatorRealignment),
+            0x09 => Ok(CommandId::GtsRequest),
+            _ => Err("Invalid addressing mode"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub struct NWK(pub u16);
+
+impl NWK {
+    pub fn to_bytes(&self) -> [u8; 2] {
+        self.0.to_le_bytes()
+    }
+}
+
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub struct EUI64(pub [u8; 8]);
+
+impl EUI64 {
+    pub fn to_bytes(&self) -> [u8; 8] {
+        self.0
+    }
+}
+
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub enum Address {
+    NWK(NWK),
+    EUI64(EUI64),
+}
+
+
+#[derive(Debug)]
+pub struct Frame {
+    pub frame_control: FrameControl,
+    pub sequence_number: Option<u8>,
+    pub dest_pan_id: Option<u16>,
+    pub dest_address: Option<Address>,
+    pub src_pan_id: Option<u16>,
+    pub src_address: Option<Address>,
+    pub payload: Vec<u8>,
+    pub fcs: u16,
+}
+
+
+impl Frame {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, &'static str> {
+        if data.len() < 2 + 2 {
+            return Err("Data too short to contain a frame");
+        }
+
+        let fcs = u16::from_le_bytes([data[data.len() - 2], data[data.len() - 1]]);
+        let data = &data[..data.len() - 2];
+
+        if Self::compute_fcs(data) != fcs {
+            return Err("Invalid FCS");
+        }
+
+        let mut offset = 0;
+
+        // Parse frame control
+        let (frame_control, remaining) = FrameControl::deserialize(data)?;
+
+        // Parse sequence number
+        let sequence_number = if frame_control.sequence_number_suppression {
+            None
+        } else {
+            Some(remaining[0])
+        };
+
+        offset += if frame_control.sequence_number_suppression { 0 } else { 1 };
+
+        // Parse destination PAN ID and address
+        let (dest_pan_id, dest_address) = match frame_control.dest_addr_mode {
+            AddressingMode::Short => {
+                let pan_id = u16::from_le_bytes([remaining[offset], remaining[offset + 1]]);
+                offset += 2;
+
+                let address = Address::NWK(NWK(u16::from_le_bytes([
+                    remaining[offset],
+                    remaining[offset + 1],
+                ])));
+                offset += 2;
+
+                (Some(pan_id), Some(address))
+            }
+            AddressingMode::Long => {
+                let pan_id = u16::from_le_bytes([remaining[offset], remaining[offset + 1]]);
+                offset += 2;
+
+                let address = Address::EUI64(EUI64([
+                    remaining[offset],
+                    remaining[offset + 1],
+                    remaining[offset + 2],
+                    remaining[offset + 3],
+                    remaining[offset + 4],
+                    remaining[offset + 5],
+                    remaining[offset + 6],
+                    remaining[offset + 7],
+                ]));
+                offset += 8;
+
+                (Some(pan_id), Some(address))
+            }
+            AddressingMode::None => (None, None),
+        };
+
+        // Parse source PAN ID
+        let src_pan_id = if frame_control.pan_id_compression {
+            dest_pan_id
+        } else if (frame_control.frame_type == FrameType::Data) || (frame_control.frame_type == FrameType::Command) {
+            let pan_id = u16::from_le_bytes([remaining[offset], remaining[offset + 1]]);
+            offset += 2;
+            Some(pan_id)
+        } else {
+            None
+        };
+
+        // Parse source address
+        let src_address = match frame_control.src_addr_mode {
+            AddressingMode::Short => {
+                let address = Address::NWK(NWK(u16::from_le_bytes([
+                    remaining[offset],
+                    remaining[offset + 1],
+                ])));
+                offset += 2;
+                Some(address)
+            }
+            AddressingMode::Long => {
+                let address = Address::EUI64(EUI64([
+                    remaining[offset],
+                    remaining[offset + 1],
+                    remaining[offset + 2],
+                    remaining[offset + 3],
+                    remaining[offset + 4],
+                    remaining[offset + 5],
+                    remaining[offset + 6],
+                    remaining[offset + 7],
+                ]));
+                offset += 8;
+                Some(address)
+            }
+            _ => None,
+        };
+
+        // Remaining bytes are payload
+        let payload = remaining[offset..].to_vec();
+
+        Ok(Self {
+            frame_control,
+            sequence_number,
+            dest_pan_id,
+            dest_address,
+            src_pan_id,
+            src_address,
+            payload,
+            fcs,
+        })
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut data = Vec::new();
+
+        // Serialize frame control
+        data.extend(self.frame_control.to_bytes());
+
+        // Serialize sequence number
+        if let Some(seq) = self.sequence_number {
+            data.push(seq);
+        }
+
+        // Serialize destination
+        if let Some(pan_id) = self.dest_pan_id {
+            data.extend(pan_id.to_le_bytes());
+        }
+        if let Some(address) = &self.dest_address {
+            data.extend(match address {
+                Address::NWK(addr) => addr.to_bytes().to_vec(),
+                Address::EUI64(addr) => addr.to_bytes().to_vec(),
+            });
+        }
+
+        // Serialize source
+        if !self.frame_control.pan_id_compression {
+            if let Some(pan_id) = self.src_pan_id {
+                data.extend(pan_id.to_le_bytes());
+            }
+        }
+
+        if let Some(address) = &self.src_address {
+            data.extend(match address {
+                Address::NWK(addr) => addr.to_bytes().to_vec(),
+                Address::EUI64(addr) => addr.to_bytes().to_vec(),
+            });
+        }
+
+        // Add payload
+        data.extend(&self.payload);
+
+        // Add FCS
+        data.extend(&Self::compute_fcs(&data).to_le_bytes());
+
+        data
+    }
+
+    pub fn compute_fcs(data: &[u8]) -> u16 {
+        let mut crc: u16 = 0x0000;
+
+        for c in data.iter() {
+            let q = (((crc & 0x0F) as u8) ^ (c >> 0)) & 0x0F;
+            crc = (crc >> 4) ^ ((q as u16) * 0x1081);
+
+            let r = (((crc & 0x0F) as u8) ^ (c >> 4)) & 0x0F;
+            crc = (crc >> 4) ^ ((r as u16) * 0x1081);
+        }
+
+        crc
+    }
+}
