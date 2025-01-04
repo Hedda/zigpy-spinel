@@ -24,8 +24,8 @@ impl NWK {
         Ok((Self(u16::from_be_bytes([bytes[0], bytes[1]])), &bytes[2..]))
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        self.0.to_be_bytes().to_vec()
+    pub fn to_bytes(&self) -> [u8; 2] {
+        self.0.to_be_bytes()
     }
 }
 
@@ -45,8 +45,8 @@ impl EUI64 {
         Ok((Self(eui), &bytes[8..]))
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        self.0.to_vec()
+    pub fn to_bytes(&self) -> [u8; 8] {
+        self.0
     }
 }
 
@@ -135,26 +135,20 @@ impl NwkFrameControl {
         ))
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-
-        bytes.push(
+    pub fn to_bytes(&self) -> [u8; 2] {
+        [
             (((self.frame_type as u8) & 0b11) << 0)
           | (((self.protocol_version as u8) & 0b1111) << 2)
-          | (((self.discover_route as u8) & 0b11) << 6),
-        );
-
-        bytes.push(
+          | (((self.discover_route as u8) & 0b11) << 6)
+        ,
             (((self.multicast as u8) & 0b1) << 0)
           | (((self.security as u8) & 0b1) << 1)
           | (((self.source_route as u8) & 0b1) << 2)
           | (((self.destination as u8) & 0b1) << 3)
           | (((self.extended_source as u8) & 0b1) << 4)
           | (((self.end_device_initiator as u8) & 0b1) << 5)
-          | (((self.reserved as u8) & 0b11) << 6),
-        );
-
-        bytes
+          | (((self.reserved as u8) & 0b11) << 6)
+        ]
     }
 }
 
@@ -370,18 +364,14 @@ impl NwkSecurityHeaderControlField {
         )
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-
-        bytes.push(
+    pub fn to_bytes(&self) -> [u8; 1] {
+        [
             ((self.security_level as u8) & 0b111)
           | (((self.key_id as u8) & 0b11) << 3)
           | ((self.extended_source as u8) << 5)
           | ((self.require_verified_frame_counter as u8) << 6)
           | ((self.reserved & 0b1) << 7)
-        );
-
-        bytes
+        ]
     }
 }
 
@@ -461,24 +451,130 @@ impl Key {
         Ok(Self(key))
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        self.0.to_vec()
+    pub fn to_bytes(&self) -> [u8; 16] {
+        self.0
     }
 }
 
+fn right_pad_to_multiple_of_16(data: &[u8]) -> Vec<Block> {
+    // Pre-allocate enough blocks
+    let mut blocks = Vec::<Block>::with_capacity((data.len() + 15) / 16);
 
-fn right_pad_to_multiple_of_16(data: &[u8]) -> Vec<u8> {
-    // from the left
-    let mut padded = Vec::new();
-    padded.extend(data);
-
-    let padding = 16 - (data.len() % 16);
-
-    for _ in 0..padding {
-        padded.push(0x00);
+    // Push all full 16-byte chunks
+    for chunk in data.chunks_exact(16) {
+        blocks.push(Block::try_from(chunk).expect("16-byte chunk is always valid"));
     }
 
-    padded
+    // If there's a remainder, copy it into a new block and pad the rest with zeros
+    let remainder = data.len() % 16;
+    if remainder != 0 {
+        let offset = data.len() - remainder;
+
+        let mut last_block = Block::default();
+        last_block[..remainder].copy_from_slice(&data[offset..]);
+        blocks.push(last_block);
+    }
+
+    blocks
+}
+
+
+pub struct NwkCrypto<const L: usize, const M: usize>;
+
+impl<const L: usize, const M: usize> NwkCrypto<L, M> {
+    pub fn split_mac_tag(&self, tagged_ciphertext: &[u8]) -> (Vec<u8>, [u8; M]) {
+        let ciphertext = tagged_ciphertext[..tagged_ciphertext.len() - M].to_vec();
+
+        let mut mac_tag = [0; M];
+        mac_tag.copy_from_slice(&tagged_ciphertext[tagged_ciphertext.len() - M..]);
+
+        (ciphertext, mac_tag)
+    }
+
+    pub fn compute_mac(
+        &self,
+        frame: &NwkFrame,
+        key: &Key,
+        plaintext: &[u8],
+        aux_header: &NwkAuxHeader,
+        nonce: &[u8; 13],
+    ) -> [u8; M] {
+        let mut auth_data = Vec::new();
+        auth_data.extend(frame.nwk_header.to_bytes());
+        auth_data.extend(aux_header.to_bytes());
+
+        let encoded_auth_data_len = auth_data.len().to_be_bytes();
+        let mut added_auth_data = Vec::new();
+        added_auth_data.extend(&encoded_auth_data_len[encoded_auth_data_len.len() - L..]);
+        added_auth_data.extend(&auth_data);
+
+        let encoded_plaintext_len = plaintext.len().to_be_bytes();
+        let mut b0 = Block::default();
+        b0[0] = 0b0_1_001_001;  // Flags
+        b0[1..14].copy_from_slice(nonce);
+        b0[14..16].copy_from_slice(&encoded_plaintext_len[encoded_plaintext_len.len() - L..]);
+
+        let mut authed_plaintext = Vec::<Block>::new();
+        authed_plaintext.extend(right_pad_to_multiple_of_16(&added_auth_data));
+        authed_plaintext.extend(right_pad_to_multiple_of_16(&plaintext));
+
+        let mut ciphertext_buffer = Vec::<Block>::new();
+        ciphertext_buffer.push(b0);
+        ciphertext_buffer.extend(&authed_plaintext);
+
+        let iv = [0x00; 16];
+        let mut encryptor = Encryptor::<Aes128>::new(&(key.0).into(), &iv.into());
+        encryptor.encrypt_blocks(&mut ciphertext_buffer);
+
+        let mut mac_tag = [0; M];
+        mac_tag.copy_from_slice(&ciphertext_buffer[ciphertext_buffer.len() - 1][..M]);
+
+        mac_tag
+    }
+
+    pub fn encrypt_decrypt(
+        &self,
+        key: &Key,
+        nonce: &[u8; 13],
+        mac_tag: &[u8; M],
+        plaintext: &[u8],
+    ) -> ([u8; M], Vec<u8>) {
+        let cipher = Aes128::new(&(key.0).into());
+
+        let mut tagged_plaintext_blocks = Vec::<Block>::new();
+        tagged_plaintext_blocks.extend(right_pad_to_multiple_of_16(mac_tag));
+        tagged_plaintext_blocks.extend(right_pad_to_multiple_of_16(plaintext));
+
+        println!("Tagged plaintext blocks: {:#?}", tagged_plaintext_blocks);
+
+        let mut tagged_ciphertext_blocks = Vec::<Block>::new();
+        let mut buffer_block = Block::default();
+
+        for (block_num, plaintext_block) in tagged_plaintext_blocks.iter().enumerate() {
+            let encoded_block_num = block_num.to_be_bytes();
+            let mut counter_block = Block::default();
+            counter_block[0] = 0b0_0_000_001;
+            counter_block[1..14].copy_from_slice(nonce);
+            counter_block[14..16].copy_from_slice(&encoded_block_num[encoded_block_num.len() - L..]);
+
+            cipher.encrypt_block_b2b(&mut counter_block, &mut buffer_block);
+            tagged_ciphertext_blocks.push(Block::from_fn(|i|
+                buffer_block[i] ^ plaintext_block[i]
+            ));
+        }
+
+        println!("Tagged ciphertext blocks: {:#?}", tagged_ciphertext_blocks);
+
+        // The first M bytes of the first block is the "encrypted_mac_tag":
+        let mut encrypted_mac_tag = [0; M];
+        encrypted_mac_tag.copy_from_slice(&tagged_ciphertext_blocks[0][0..M]);
+
+        // The actual ciphertext portion starts at the second block
+        let ciphertext_vec = Vec::<u8>::from(tagged_ciphertext_blocks[1..].concat());
+        let ciphertext = ciphertext_vec[..plaintext.len()].to_vec();
+
+        (encrypted_mac_tag, ciphertext)
+    }
 }
 
 
@@ -541,12 +637,7 @@ impl NwkFrame {
         aux_header
     }
 
-    pub fn get_encryption_l_and_m(&self) -> (u8, u8) {
-        // TODO: pull this from the security level
-        (2, 4)
-    }
-
-    pub fn get_nonce(&self, aux_header: &NwkAuxHeader) -> Vec<u8> {
+    pub fn get_nonce(&self, aux_header: &NwkAuxHeader) -> [u8; 13] {
         let source;
 
         if !aux_header.extended_source.is_none() {
@@ -558,95 +649,18 @@ impl NwkFrame {
             panic!("Cannot compute nonce with no source address");
         }
 
-        let mut nonce = Vec::new();
-        nonce.extend(source.to_bytes());
-        nonce.extend(aux_header.frame_counter.to_le_bytes().to_vec());
-        nonce.extend(aux_header.security_control.to_bytes());
+        let mut nonce = [0; 13];
+        nonce[..8].copy_from_slice(&source.to_bytes());
+        nonce[8..12].copy_from_slice(&aux_header.frame_counter.to_le_bytes());
+        nonce[12..13].copy_from_slice(&aux_header.security_control.to_bytes());
 
         nonce
     }
 
-    pub fn compute_mac(&self, l: u8, m: u8, key: &Key, plaintext: &[u8], aux_header: &NwkAuxHeader, nonce: &[u8]) -> Vec<u8> {
-        let mut auth_data = Vec::new();
-        auth_data.extend(self.nwk_header.to_bytes());
-        auth_data.extend(aux_header.to_bytes());
-
-        let encoded_auth_data_len = auth_data.len().to_be_bytes();
-        let mut added_auth_data = Vec::new();
-        added_auth_data.extend(&encoded_auth_data_len[encoded_auth_data_len.len() - l as usize..]);
-        added_auth_data.extend(auth_data.clone());
-        added_auth_data = right_pad_to_multiple_of_16(&added_auth_data);
-
-        let mut b0 = Vec::new();
-        b0.push(0b0_1_001_001);
-        b0.extend(nonce);
-
-        let encoded_plaintext_len = plaintext.len().to_be_bytes();
-        b0.extend(&encoded_plaintext_len[encoded_plaintext_len.len() - l as usize..]);
-
-        let mut authed_plaintext = Vec::new();
-        authed_plaintext.extend(added_auth_data.clone());
-        authed_plaintext.extend(plaintext);
-        authed_plaintext = right_pad_to_multiple_of_16(&authed_plaintext);
-
-        let mut ciphertext = Vec::new();
-        ciphertext.extend(b0.clone());
-        ciphertext.extend(authed_plaintext.clone());
-
-        let mut buffer = ciphertext.clone();
-        assert!(buffer.len() % 16 == 0, "Buffer must be padded to a multiple of the block size");
-
-        let mut blocks: Vec<Block> = buffer
-            .chunks_exact_mut(16)
-            .map(|chunk| {
-                let chunk_array: [u8; 16] = chunk.try_into().expect("Chunk size must be 16 bytes");
-                Block::from(chunk_array)
-            })
-            .collect();
-
-        let iv = [0x00; 16];
-        let mut encryptor = Encryptor::<Aes128>::new(&(key.0).into(), &iv.into());
-        encryptor.encrypt_blocks(&mut blocks);
-
-        let mac_tag = blocks[blocks.len() - 1][..m as usize].to_vec();
-
-        mac_tag
-    }
-
-    pub fn encrypt_decrypt(&self, l: u8, m: u8, key: &Key, nonce: &[u8], mac_tag: &[u8], plaintext: &[u8]) -> (Vec<u8>, Vec<u8>) {
-        let cipher = Aes128::new(&(key.0).into());
-
-        let mut tagged_plaintext = Vec::new();
-        tagged_plaintext.extend(right_pad_to_multiple_of_16(mac_tag));
-        tagged_plaintext.extend(right_pad_to_multiple_of_16(plaintext));
-
-        let mut tagged_ciphertext = Vec::new();
-        let mut buffer_block = Block::default();
-
-        // Hazardous: a nonstandard counter scheme is used so we have to manually implement CTR mode
-        for block_num in 0..tagged_plaintext.len() / 16 {
-            let encoded_block_num = block_num.to_be_bytes();
-
-            let mut counter = Vec::new();
-            counter.push(0b0_0_000_001);
-            counter.extend(nonce);
-            counter.extend(&encoded_block_num[encoded_block_num.len() - l as usize..]);
-
-            let counter_block_array: [u8; 16] = counter.try_into().expect("Counter must be 16 bytes");
-            let mut counter_block = Block::from(counter_block_array);
-            cipher.encrypt_block_b2b(&mut counter_block, &mut buffer_block);
-
-            let tagged_plaintext_block = tagged_plaintext[16 * block_num..16 * (block_num + 1)].to_vec();
-
-            for i in 0..16 {
-                tagged_ciphertext.push(buffer_block[i] ^ tagged_plaintext_block[i]);
-            }
-        }
-
-        let encrypted_mac_tag = tagged_ciphertext[0..m as usize].to_vec();
-        let ciphertext = tagged_ciphertext[16..16 + plaintext.len()].to_vec();
-
-        (encrypted_mac_tag, ciphertext)
+    pub fn get_crypto(&self) -> NwkCrypto<2, 4> {
+        // Only a single configuration is supported but to keep the cryptography code
+        // readable, it's useful to be generic here
+        NwkCrypto::<2, 4>
     }
 
     pub fn decrypt(&self, key: &Key) -> Result<Self, &'static str> {
@@ -654,14 +668,13 @@ impl NwkFrame {
             return Err("Cannot decrypt unencrypted frame");
         }
 
-        let (l, m) = self.get_encryption_l_and_m();
+        let crypto = self.get_crypto();
+
         let aux_header = self.get_modified_aux_header(NwkSecurityLevel::AesCcm32);
         let nonce = self.get_nonce(&aux_header);
-        let ciphertext = &self.payload[..self.payload.len() - m as usize];
-        let encrypted_mac_tag = &self.payload[self.payload.len() - m as usize..];
-
-        let (provided_mac_tag, plaintext) = self.encrypt_decrypt(l, m, key, &nonce, encrypted_mac_tag, ciphertext);
-        let mac_tag = self.compute_mac(l, m, key, &plaintext, &aux_header, &nonce);
+        let (ciphertext, encrypted_mac_tag) = crypto.split_mac_tag(&self.payload);
+        let (provided_mac_tag, plaintext) = crypto.encrypt_decrypt(key, &nonce, &encrypted_mac_tag, &ciphertext);
+        let mac_tag = crypto.compute_mac(&self, key, &plaintext, &aux_header, &nonce);
 
         if !constant_time_eq(&provided_mac_tag, &mac_tag) {
             return Err("Decryption failed, invalid MAC tag");
@@ -682,13 +695,14 @@ impl NwkFrame {
             return Err("Cannot encrypt already encrypted frame");
         }
 
-        let (l, m) = self.get_encryption_l_and_m();
+        let crypto = self.get_crypto();
+
         let aux_header = self.get_modified_aux_header(NwkSecurityLevel::AesCcm32);
         let nonce = self.get_nonce(&aux_header);
         let plaintext = &self.payload;
 
-        let mac_tag = self.compute_mac(l, m, key, &plaintext, &aux_header, &nonce);
-        let (encrypted_mac_tag, ciphertext) = self.encrypt_decrypt(l, m, key, &nonce, &mac_tag, &plaintext);
+        let mac_tag = crypto.compute_mac(&self, key, &plaintext, &aux_header, &nonce);
+        let (encrypted_mac_tag, ciphertext) = crypto.encrypt_decrypt(key, &nonce, &mac_tag, &plaintext);
 
         let mut payload = ciphertext;
         payload.extend(encrypted_mac_tag);
