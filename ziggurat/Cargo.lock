@@ -107,7 +107,7 @@ name = "z802154"
 version = "0.0.1"
 
 [[package]]
-name = "zzigbee"
+name = "zzigbee_frames"
 version = "0.0.1"
 dependencies = [
  "aes",

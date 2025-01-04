@@ -1,4 +1,4 @@
-use zzigbee::*;
+use zzigbee_frames::*;
 
 #[test]
 fn test_decryption() {

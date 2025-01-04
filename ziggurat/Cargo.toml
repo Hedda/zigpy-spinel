@@ -1,6 +1,6 @@
 [workspace]
 members = [
 	"z802154",
-	"zzigbee",
+	"zzigbee_frames",
 ]
 resolver = "2"
