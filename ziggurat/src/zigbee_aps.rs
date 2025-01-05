@@ -2,7 +2,6 @@
 
 use std::convert::TryFrom;
 
-
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum ApsFrameType {
     Data = 0b00,
@@ -20,7 +19,6 @@ impl TryFrom<u8> for ApsFrameType {
         }
     }
 }
-
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum ApsDeliveryMode {
@@ -40,7 +38,6 @@ impl TryFrom<u8> for ApsDeliveryMode {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApsFrameControl {
     pub frame_type: ApsFrameType,
@@ -57,30 +54,28 @@ impl ApsFrameControl {
             return Err("Not enough data to parse ApsFrameControl");
         }
 
-        Ok(
-            (Self {
+        Ok((
+            Self {
                 frame_type: ApsFrameType::try_from((bytes[0] >> 0) & 0b11)?,
                 delivery_mode: ApsDeliveryMode::try_from((bytes[0] >> 2) & 0b11)?,
                 reserved: (bytes[0] >> 4) & 0b1,
                 security: (bytes[0] >> 5) & 0b1 == 1,
                 ack_request: (bytes[0] >> 6) & 0b1 == 1,
                 extended_header: (bytes[0] >> 7) & 0b1 == 1,
-            }, &bytes[1..])
-        )
+            },
+            &bytes[1..],
+        ))
     }
 
     pub fn to_bytes(&self) -> [u8; 1] {
-        [
-            (((self.frame_type as u8) & 0b11) << 0)
-          | (((self.delivery_mode as u8) & 0b11) << 2)
-          | (((self.reserved as u8) & 0b1) << 4)
-          | (((self.security as u8) & 0b1) << 5)
-          | (((self.ack_request as u8) & 0b1) << 6)
-          | (((self.extended_header as u8) & 0b1) << 7)
-        ]
+        [(((self.frame_type as u8) & 0b11) << 0)
+            | (((self.delivery_mode as u8) & 0b11) << 2)
+            | (((self.reserved as u8) & 0b1) << 4)
+            | (((self.security as u8) & 0b1) << 5)
+            | (((self.ack_request as u8) & 0b1) << 6)
+            | (((self.extended_header as u8) & 0b1) << 7)]
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApsFrame {
@@ -107,17 +102,15 @@ impl ApsFrame {
         let counter = u8::from_le_bytes([remaining[6]]);
         let asdu = remaining[7..].to_vec();
 
-        Ok(
-            Self {
-                frame_control: frame_control,
-                destination_endpoint: destination_endpoint,
-                cluster_id: cluster_id,
-                profile_id: profile_id,
-                source_endpoint: source_endpoint,
-                counter: counter,
-                asdu: asdu,
-            }
-        )
+        Ok(Self {
+            frame_control: frame_control,
+            destination_endpoint: destination_endpoint,
+            cluster_id: cluster_id,
+            profile_id: profile_id,
+            source_endpoint: source_endpoint,
+            counter: counter,
+            asdu: asdu,
+        })
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -164,10 +157,10 @@ mod test {
         assert_eq!(aps_frame, expected_aps_frame);
     }
 
-
     #[test]
     fn test_nwk_decryption_broadcast() {
-        let aps_frame = ApsFrame::from_bytes(&hex!("080013000000000000426b4fdeb726004b12008e")).unwrap();
+        let aps_frame =
+            ApsFrame::from_bytes(&hex!("080013000000000000426b4fdeb726004b12008e")).unwrap();
 
         let expected_aps_frame = ApsFrame {
             frame_control: ApsFrameControl {
@@ -188,5 +181,4 @@ mod test {
 
         assert_eq!(aps_frame, expected_aps_frame);
     }
-
 }

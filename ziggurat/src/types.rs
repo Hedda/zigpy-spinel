@@ -1,6 +1,5 @@
-use std::fmt;
 use hex;
-
+use std::fmt;
 
 #[derive(PartialEq, Copy, Clone)]
 pub struct NWK(pub u16);
@@ -26,7 +25,6 @@ impl fmt::Debug for NWK {
             .finish()
     }
 }
-
 
 #[derive(PartialEq, Copy, Clone)]
 pub struct EUI64(pub [u8; 8]);
@@ -64,25 +62,29 @@ impl EUI64 {
     }
 }
 
-
 impl fmt::Debug for EUI64 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("EUI64")
             .field(&format_args!(
                 "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7]
+                self.0[0],
+                self.0[1],
+                self.0[2],
+                self.0[3],
+                self.0[4],
+                self.0[5],
+                self.0[6],
+                self.0[7]
             ))
             .finish()
     }
 }
-
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Address {
     NWK(NWK),
     EUI64(EUI64),
 }
-
 
 #[derive(Clone, PartialEq)]
 pub struct Key(pub [u8; 16]);
@@ -117,7 +119,6 @@ impl Key {
         self.0
     }
 }
-
 
 impl fmt::Debug for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -1,6 +1,5 @@
-use crate::types::{NWK, EUI64};
+use crate::types::{EUI64, NWK};
 use std::convert::TryFrom;
-
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Ieee802154FrameType {
@@ -65,8 +64,8 @@ impl Ieee802154FrameControl {
             return Err("Not enough data to parse Ieee802154FrameControl");
         }
 
-        Ok(
-            (Self {
+        Ok((
+            Self {
                 frame_type: Ieee802154FrameType::try_from(bytes[0] & 0b0000_0111)?,
                 security_enabled: (bytes[0] & 0b0000_1000) != 0,
                 frame_pending: (bytes[0] & 0b0001_0000) != 0,
@@ -78,28 +77,29 @@ impl Ieee802154FrameControl {
                 dest_addr_mode: Ieee802154AddressingMode::try_from((bytes[1] >> 2) & 0b0000_0011)?,
                 frame_version: (bytes[1] >> 4) & 0b0000_0011,
                 src_addr_mode: Ieee802154AddressingMode::try_from((bytes[1] >> 6) & 0b0000_0011)?,
-            }, &bytes[2..])
-        )
+            },
+            &bytes[2..],
+        ))
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         bytes.push(
-              ((self.frame_type as u8) << 0)
-            | ((self.security_enabled as u8) << 3)
-            | ((self.frame_pending as u8) << 4)
-            | ((self.ack_request as u8) << 5)
-            | ((self.pan_id_compression as u8) << 6)
-            | ((self.reserved as u8) << 7),
+            ((self.frame_type as u8) << 0)
+                | ((self.security_enabled as u8) << 3)
+                | ((self.frame_pending as u8) << 4)
+                | ((self.ack_request as u8) << 5)
+                | ((self.pan_id_compression as u8) << 6)
+                | ((self.reserved as u8) << 7),
         );
 
         bytes.push(
-              ((self.sequence_number_suppression as u8) << 0)
-            | ((self.information_elements_present as u8) << 1)
-            | ((self.dest_addr_mode as u8) << 2)
-            | ((self.frame_version as u8) << 4)
-            | ((self.src_addr_mode as u8) << 6),
+            ((self.sequence_number_suppression as u8) << 0)
+                | ((self.information_elements_present as u8) << 1)
+                | ((self.dest_addr_mode as u8) << 2)
+                | ((self.frame_version as u8) << 4)
+                | ((self.src_addr_mode as u8) << 6),
         );
 
         bytes
@@ -146,7 +146,6 @@ pub enum Ieee802154Address {
     EUI64(EUI64),
 }
 
-
 #[derive(Debug)]
 pub struct Ieee802154Frame {
     pub frame_control: Ieee802154FrameControl,
@@ -158,7 +157,6 @@ pub struct Ieee802154Frame {
     pub payload: Vec<u8>,
     pub fcs: u16,
 }
-
 
 impl Ieee802154Frame {
     pub fn from_bytes(data: &[u8]) -> Result<Self, &'static str> {
@@ -185,7 +183,11 @@ impl Ieee802154Frame {
             Some(remaining[0])
         };
 
-        offset += if frame_control.sequence_number_suppression { 0 } else { 1 };
+        offset += if frame_control.sequence_number_suppression {
+            0
+        } else {
+            1
+        };
 
         // Parse destination PAN ID and address
         let (dest_pan_id, dest_address) = match frame_control.dest_addr_mode {
@@ -225,7 +227,9 @@ impl Ieee802154Frame {
         // Parse source PAN ID
         let src_pan_id = if frame_control.pan_id_compression {
             dest_pan_id
-        } else if (frame_control.frame_type == Ieee802154FrameType::Data) || (frame_control.frame_type == Ieee802154FrameType::Command) {
+        } else if (frame_control.frame_type == Ieee802154FrameType::Data)
+            || (frame_control.frame_type == Ieee802154FrameType::Command)
+        {
             let pan_id = u16::from_le_bytes([remaining[offset], remaining[offset + 1]]);
             offset += 2;
             Some(pan_id)
@@ -335,7 +339,6 @@ impl Ieee802154Frame {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -353,7 +356,10 @@ mod test {
         assert_eq!(frame_control.reserved, false);
         assert_eq!(frame_control.sequence_number_suppression, false);
         assert_eq!(frame_control.information_elements_present, false);
-        assert_eq!(frame_control.dest_addr_mode, Ieee802154AddressingMode::Short);
+        assert_eq!(
+            frame_control.dest_addr_mode,
+            Ieee802154AddressingMode::Short
+        );
         assert_eq!(frame_control.frame_version, 0);
         assert_eq!(frame_control.src_addr_mode, Ieee802154AddressingMode::Short);
 
@@ -364,11 +370,11 @@ mod test {
     #[test]
     fn test_frame_data() {
         let bytes = [
-            0x61, 0x88, 0xa3, 0xf5, 0x3e, 0x34, 0x52, 0x63, 0xf6, 0x48, 0x02, 0x00,
-            0x00, 0xa5, 0x79, 0x1d, 0xc1, 0x28, 0x41, 0xf0, 0x48, 0x02, 0x8b, 0x86,
-            0x34, 0xfe, 0xff, 0x27, 0x71, 0x84, 0x00, 0x13, 0xdc, 0x42, 0x64, 0x0f,
-            0xca, 0x9c, 0x6e, 0xff, 0xc9, 0xcf, 0xd3, 0x35, 0x53, 0x54, 0xca, 0x68,
-            0x16, 0x1c, 0xc9, 0x44, 0xc4, 0xad, 0x37, 0xc5, 0xea
+            0x61, 0x88, 0xa3, 0xf5, 0x3e, 0x34, 0x52, 0x63, 0xf6, 0x48, 0x02, 0x00, 0x00, 0xa5,
+            0x79, 0x1d, 0xc1, 0x28, 0x41, 0xf0, 0x48, 0x02, 0x8b, 0x86, 0x34, 0xfe, 0xff, 0x27,
+            0x71, 0x84, 0x00, 0x13, 0xdc, 0x42, 0x64, 0x0f, 0xca, 0x9c, 0x6e, 0xff, 0xc9, 0xcf,
+            0xd3, 0x35, 0x53, 0x54, 0xca, 0x68, 0x16, 0x1c, 0xc9, 0x44, 0xc4, 0xad, 0x37, 0xc5,
+            0xea,
         ];
 
         let frame = Ieee802154Frame::from_bytes(&bytes).unwrap();
@@ -381,17 +387,26 @@ mod test {
         assert_eq!(frame.frame_control.reserved, false);
         assert_eq!(frame.frame_control.sequence_number_suppression, false);
         assert_eq!(frame.frame_control.information_elements_present, false);
-        assert_eq!(frame.frame_control.dest_addr_mode, Ieee802154AddressingMode::Short);
+        assert_eq!(
+            frame.frame_control.dest_addr_mode,
+            Ieee802154AddressingMode::Short
+        );
         assert_eq!(frame.frame_control.frame_version, 0);
-        assert_eq!(frame.frame_control.src_addr_mode, Ieee802154AddressingMode::Short);
+        assert_eq!(
+            frame.frame_control.src_addr_mode,
+            Ieee802154AddressingMode::Short
+        );
 
         assert_eq!(frame.sequence_number, Some(163));
         assert_eq!(frame.dest_pan_id, Some(0x3EF5));
-        assert_eq!(frame.dest_address, Some(Ieee802154Address::NWK(NWK(0x5234))));
+        assert_eq!(
+            frame.dest_address,
+            Some(Ieee802154Address::NWK(NWK(0x5234)))
+        );
         assert_eq!(frame.src_pan_id, Some(0x3EF5));
         assert_eq!(frame.src_address, Some(Ieee802154Address::NWK(NWK(0xF663))));
 
-        assert_eq!(frame.payload, bytes[9 .. bytes.len() - 2]);
+        assert_eq!(frame.payload, bytes[9..bytes.len() - 2]);
         assert_eq!(frame.fcs, 0xEAC5);
 
         assert_eq!(frame.to_bytes(), bytes);
@@ -400,11 +415,11 @@ mod test {
     #[test]
     fn test_frame_bad_fcs() {
         let mut bytes = [
-            0x61, 0x88, 0xa3, 0xf5, 0x3e, 0x34, 0x52, 0x63, 0xf6, 0x48, 0x02, 0x00,
-            0x00, 0xa5, 0x79, 0x1d, 0xc1, 0x28, 0x41, 0xf0, 0x48, 0x02, 0x8b, 0x86,
-            0x34, 0xfe, 0xff, 0x27, 0x71, 0x84, 0x00, 0x13, 0xdc, 0x42, 0x64, 0x0f,
-            0xca, 0x9c, 0x6e, 0xff, 0xc9, 0xcf, 0xd3, 0x35, 0x53, 0x54, 0xca, 0x68,
-            0x16, 0x1c, 0xc9, 0x44, 0xc4, 0xad, 0x37, 0xc5, 0xea
+            0x61, 0x88, 0xa3, 0xf5, 0x3e, 0x34, 0x52, 0x63, 0xf6, 0x48, 0x02, 0x00, 0x00, 0xa5,
+            0x79, 0x1d, 0xc1, 0x28, 0x41, 0xf0, 0x48, 0x02, 0x8b, 0x86, 0x34, 0xfe, 0xff, 0x27,
+            0x71, 0x84, 0x00, 0x13, 0xdc, 0x42, 0x64, 0x0f, 0xca, 0x9c, 0x6e, 0xff, 0xc9, 0xcf,
+            0xd3, 0x35, 0x53, 0x54, 0xca, 0x68, 0x16, 0x1c, 0xc9, 0x44, 0xc4, 0xad, 0x37, 0xc5,
+            0xea,
         ];
 
         bytes[5] ^= 0xFF;
@@ -427,9 +442,15 @@ mod test {
         assert_eq!(frame.frame_control.reserved, false);
         assert_eq!(frame.frame_control.sequence_number_suppression, false);
         assert_eq!(frame.frame_control.information_elements_present, false);
-        assert_eq!(frame.frame_control.dest_addr_mode, Ieee802154AddressingMode::None);
+        assert_eq!(
+            frame.frame_control.dest_addr_mode,
+            Ieee802154AddressingMode::None
+        );
         assert_eq!(frame.frame_control.frame_version, 0);
-        assert_eq!(frame.frame_control.src_addr_mode, Ieee802154AddressingMode::None);
+        assert_eq!(
+            frame.frame_control.src_addr_mode,
+            Ieee802154AddressingMode::None
+        );
 
         assert_eq!(frame.sequence_number, Some(209));
         assert_eq!(frame.dest_pan_id, None);

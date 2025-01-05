@@ -1,18 +1,17 @@
 #![allow(dead_code)]
 
-use crate::types::{NWK, EUI64, Key};
+use crate::types::{Key, EUI64, NWK};
 
 use std::convert::TryFrom;
 
-use cbc::Encryptor;
-use aes::Block;
-use aes::Aes128;
+use aes::cipher::BlockModeEncrypt;
 use aes::cipher::KeyInit;
 use aes::cipher::KeyIvInit;
-use aes::cipher::BlockModeEncrypt;
+use aes::Aes128;
+use aes::Block;
 use cbc::cipher::BlockCipherEncrypt;
+use cbc::Encryptor;
 use constant_time_eq::constant_time_eq;
-
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum NwkFrameType {
@@ -31,7 +30,6 @@ impl TryFrom<u8> for NwkFrameType {
         }
     }
 }
-
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum NwkRouteDiscovery {
@@ -52,7 +50,6 @@ impl TryFrom<u8> for NwkRouteDiscovery {
         }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NwkFrameControl {
@@ -94,21 +91,18 @@ impl NwkFrameControl {
     pub fn to_bytes(&self) -> [u8; 2] {
         [
             (((self.frame_type as u8) & 0b11) << 0)
-          | (((self.protocol_version as u8) & 0b1111) << 2)
-          | (((self.discover_route as u8) & 0b11) << 6)
-        ,
+                | (((self.protocol_version as u8) & 0b1111) << 2)
+                | (((self.discover_route as u8) & 0b11) << 6),
             (((self.multicast as u8) & 0b1) << 0)
-          | (((self.security as u8) & 0b1) << 1)
-          | (((self.source_route as u8) & 0b1) << 2)
-          | (((self.destination as u8) & 0b1) << 3)
-          | (((self.extended_source as u8) & 0b1) << 4)
-          | (((self.end_device_initiator as u8) & 0b1) << 5)
-          | (((self.reserved as u8) & 0b11) << 6)
+                | (((self.security as u8) & 0b1) << 1)
+                | (((self.source_route as u8) & 0b1) << 2)
+                | (((self.destination as u8) & 0b1) << 3)
+                | (((self.extended_source as u8) & 0b1) << 4)
+                | (((self.end_device_initiator as u8) & 0b1) << 5)
+                | (((self.reserved as u8) & 0b11) << 6),
         ]
     }
 }
-
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NwkHeader {
@@ -182,8 +176,8 @@ impl NwkHeader {
             source_route = Some(temp_source_route);
         }
 
-        Ok(
-            (Self {
+        Ok((
+            Self {
                 frame_control,
                 destination,
                 source,
@@ -194,8 +188,9 @@ impl NwkHeader {
                 multicast_control,
                 source_route_relay_index,
                 source_route,
-            }, remaining)
-        )
+            },
+            remaining,
+        ))
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -239,7 +234,6 @@ impl NwkHeader {
     }
 }
 
-
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum NwkSecurityHeaderKeyId {
     DataKey = 0x00,
@@ -261,7 +255,6 @@ impl TryFrom<u8> for NwkSecurityHeaderKeyId {
         }
     }
 }
-
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum NwkSecurityLevel {
@@ -293,7 +286,6 @@ impl TryFrom<u8> for NwkSecurityLevel {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct NwkSecurityHeaderControlField {
     pub security_level: NwkSecurityLevel,
@@ -309,28 +301,26 @@ impl NwkSecurityHeaderControlField {
             return Err("Not enough data to parse NwkSecurityHeaderControlField");
         }
 
-        Ok(
-            (Self {
+        Ok((
+            Self {
                 security_level: NwkSecurityLevel::try_from((bytes[0] >> 0) & 0b111)?,
                 key_id: NwkSecurityHeaderKeyId::try_from((bytes[0] >> 3) & 0b11)?,
                 extended_source: (bytes[0] >> 5) & 0b1 == 1,
                 require_verified_frame_counter: (bytes[0] >> 6) & 0b1 == 1,
                 reserved: (bytes[0] >> 7) & 0b1,
-            }, &bytes[1..])
-        )
+            },
+            &bytes[1..],
+        ))
     }
 
     pub fn to_bytes(&self) -> [u8; 1] {
-        [
-            ((self.security_level as u8) & 0b111)
-          | (((self.key_id as u8) & 0b11) << 3)
-          | ((self.extended_source as u8) << 5)
-          | ((self.require_verified_frame_counter as u8) << 6)
-          | ((self.reserved & 0b1) << 7)
-        ]
+        [((self.security_level as u8) & 0b111)
+            | (((self.key_id as u8) & 0b11) << 3)
+            | ((self.extended_source as u8) << 5)
+            | ((self.require_verified_frame_counter as u8) << 6)
+            | ((self.reserved & 0b1) << 7)]
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NwkAuxHeader {
@@ -351,7 +341,8 @@ impl NwkAuxHeader {
         let security_control;
         (security_control, remaining) = NwkSecurityHeaderControlField::deserialize(remaining)?;
 
-        let frame_counter = u32::from_le_bytes([remaining[0], remaining[1], remaining[2], remaining[3]]);
+        let frame_counter =
+            u32::from_le_bytes([remaining[0], remaining[1], remaining[2], remaining[3]]);
         remaining = &remaining[4..];
 
         let mut extended_source = None;
@@ -365,14 +356,15 @@ impl NwkAuxHeader {
         let key_sequence_number = remaining[0];
         remaining = &remaining[1..];
 
-        Ok(
-            (Self {
+        Ok((
+            Self {
                 security_control,
                 frame_counter,
                 extended_source,
                 key_sequence_number,
-            }, remaining)
-        )
+            },
+            remaining,
+        ))
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -390,7 +382,6 @@ impl NwkAuxHeader {
         bytes
     }
 }
-
 
 fn right_pad_to_multiple_of_16(data: &[u8]) -> Vec<Block> {
     // Pre-allocate enough blocks
@@ -413,7 +404,6 @@ fn right_pad_to_multiple_of_16(data: &[u8]) -> Vec<Block> {
 
     blocks
 }
-
 
 pub struct NwkCrypto<const L: usize, const M: usize>;
 
@@ -446,7 +436,7 @@ impl<const L: usize, const M: usize> NwkCrypto<L, M> {
 
         let encoded_plaintext_len = plaintext.len().to_be_bytes();
         let mut b0 = Block::default();
-        b0[0] = 0b0_1_001_001;  // Flags
+        b0[0] = 0b0_1_001_001; // Flags
         b0[1..14].copy_from_slice(nonce);
         b0[14..16].copy_from_slice(&encoded_plaintext_len[encoded_plaintext_len.len() - L..]);
 
@@ -491,12 +481,11 @@ impl<const L: usize, const M: usize> NwkCrypto<L, M> {
             let mut counter_block = Block::default();
             counter_block[0] = 0b0_0_000_001;
             counter_block[1..14].copy_from_slice(nonce);
-            counter_block[14..16].copy_from_slice(&encoded_block_num[encoded_block_num.len() - L..]);
+            counter_block[14..16]
+                .copy_from_slice(&encoded_block_num[encoded_block_num.len() - L..]);
 
             cipher.encrypt_block_b2b(&mut counter_block, &mut buffer_block);
-            tagged_ciphertext_blocks.push(Block::from_fn(|i|
-                buffer_block[i] ^ plaintext_block[i]
-            ));
+            tagged_ciphertext_blocks.push(Block::from_fn(|i| buffer_block[i] ^ plaintext_block[i]));
         }
 
         println!("Tagged ciphertext blocks: {:#?}", tagged_ciphertext_blocks);
@@ -512,7 +501,6 @@ impl<const L: usize, const M: usize> NwkCrypto<L, M> {
         (encrypted_mac_tag, ciphertext)
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NwkFrame {
@@ -538,14 +526,12 @@ impl NwkFrame {
 
         let encrypted = nwk_header.frame_control.security;
 
-        Ok(
-            Self {
-                nwk_header: nwk_header,
-                aux_header: aux_header,
-                payload: remaining.to_vec(),
-                encrypted: encrypted,
-            }
-        )
+        Ok(Self {
+            nwk_header: nwk_header,
+            aux_header: aux_header,
+            payload: remaining.to_vec(),
+            encrypted: encrypted,
+        })
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -609,21 +595,20 @@ impl NwkFrame {
         let aux_header = self.get_modified_aux_header(NwkSecurityLevel::AesCcm32);
         let nonce = self.get_nonce(&aux_header);
         let (ciphertext, encrypted_mac_tag) = crypto.split_mac_tag(&self.payload);
-        let (provided_mac_tag, plaintext) = crypto.encrypt_decrypt(key, &nonce, &encrypted_mac_tag, &ciphertext);
+        let (provided_mac_tag, plaintext) =
+            crypto.encrypt_decrypt(key, &nonce, &encrypted_mac_tag, &ciphertext);
         let mac_tag = crypto.compute_mac(&self, key, &plaintext, &aux_header, &nonce);
 
         if !constant_time_eq(&provided_mac_tag, &mac_tag) {
             return Err("Decryption failed, invalid MAC tag");
         }
 
-        Ok(
-            Self {
-                nwk_header: self.nwk_header.clone(),
-                aux_header: self.aux_header.clone(),
-                payload: plaintext,
-                encrypted: false,
-            }
-        )
+        Ok(Self {
+            nwk_header: self.nwk_header.clone(),
+            aux_header: self.aux_header.clone(),
+            payload: plaintext,
+            encrypted: false,
+        })
     }
 
     pub fn encrypt(&self, key: &Key) -> Result<Self, &'static str> {
@@ -638,22 +623,20 @@ impl NwkFrame {
         let plaintext = &self.payload;
 
         let mac_tag = crypto.compute_mac(&self, key, &plaintext, &aux_header, &nonce);
-        let (encrypted_mac_tag, ciphertext) = crypto.encrypt_decrypt(key, &nonce, &mac_tag, &plaintext);
+        let (encrypted_mac_tag, ciphertext) =
+            crypto.encrypt_decrypt(key, &nonce, &mac_tag, &plaintext);
 
         let mut payload = ciphertext;
         payload.extend(encrypted_mac_tag);
 
-        Ok(
-            Self {
-                nwk_header: self.nwk_header.clone(),
-                aux_header: self.aux_header.clone(),
-                payload: payload,
-                encrypted: true,
-            }
-        )
+        Ok(Self {
+            nwk_header: self.nwk_header.clone(),
+            aux_header: self.aux_header.clone(),
+            payload: payload,
+            encrypted: true,
+        })
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -662,7 +645,8 @@ mod test {
 
     #[test]
     fn test_nwk_decryption_unicast() {
-        let bytes = hex!("0802426b00000f2e287a0a0000a8ef171e004b120000f7a7e37b47adb47593c8a375c98ba6");
+        let bytes =
+            hex!("0802426b00000f2e287a0a0000a8ef171e004b120000f7a7e37b47adb47593c8a375c98ba6");
         let nwk_frame = NwkFrame::from_bytes(&bytes).unwrap();
 
         let expected_nwk_frame = NwkFrame {
