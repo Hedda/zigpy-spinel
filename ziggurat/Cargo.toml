@@ -13,6 +13,7 @@ edition = "2021"
 "pcap-parser" = "=0.16.0"
 "shellexpand" = "=3.1.0"
 "inline_colorization" = "0.1.6"
+derivative = "2.2.0"
 
 [[bin]]
 name = "ziggurat-pcap"

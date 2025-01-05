@@ -21,7 +21,7 @@ impl NWK {
 impl fmt::Debug for NWK {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("NWK")
-            .field(&format_args!("{:#04x}", self.0))
+            .field(&format_args!("0x{:04x}", self.0))
             .finish()
     }
 }
@@ -67,14 +67,14 @@ impl fmt::Debug for EUI64 {
         f.debug_tuple("EUI64")
             .field(&format_args!(
                 "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                self.0[0],
-                self.0[1],
-                self.0[2],
-                self.0[3],
-                self.0[4],
-                self.0[5],
+                self.0[7],
                 self.0[6],
-                self.0[7]
+                self.0[5],
+                self.0[4],
+                self.0[3],
+                self.0[2],
+                self.0[1],
+                self.0[0],
             ))
             .finish()
     }
@@ -130,4 +130,15 @@ impl fmt::Debug for Key {
             ))
             .finish()
     }
+}
+
+pub fn format_hex<T: AsRef<[u8]>>(data: T, f: &mut fmt::Formatter) -> fmt::Result {
+    for (index, b) in data.as_ref().iter().enumerate() {
+        if index == 0 {
+            write!(f, "{:02X}", b)?;
+        } else {
+            write!(f, ":{:02X}", b)?;
+        }
+    }
+    Ok(())
 }

@@ -1,6 +1,7 @@
 use std::fs::File;
 
 use inline_colorization::*;
+use pcap_parser::traits::PcapNGPacketBlock;
 use pcap_parser::{create_reader, PcapBlockOwned, PcapError};
 use shellexpand;
 
@@ -34,10 +35,14 @@ fn main() {
     println!("Loaded {} keys from Wireshark", keys.len());
 
     let pcap = std::env::args().nth(1).expect("no pcap file given");
-
     let file = File::open(pcap).expect("failed to open pcap file");
-
     let mut reader = create_reader(65536, file).expect("LegacyPcapReader");
+
+    let mut total_frames = 0;
+    let mut nwk_frames = 0;
+    let mut decrypted_frames_success = 0;
+    let mut decrypted_frames_failure = 0;
+    let mut fcs_present = None;
 
     loop {
         let (offset, block) = match reader.next() {
@@ -52,8 +57,12 @@ fn main() {
 
         let frame_data = match block {
             PcapBlockOwned::Legacy(legacy_block) => legacy_block.data.to_vec(),
-            PcapBlockOwned::NG(pcap_parser::Block::EnhancedPacket(packet)) => packet.data.to_vec(),
-            PcapBlockOwned::NG(pcap_parser::Block::SimplePacket(packet)) => packet.data.to_vec(),
+            PcapBlockOwned::NG(pcap_parser::Block::EnhancedPacket(packet)) => {
+                packet.packet_data().to_vec()
+            }
+            PcapBlockOwned::NG(pcap_parser::Block::SimplePacket(packet)) => {
+                packet.packet_data().to_vec()
+            }
             _ => {
                 reader.consume(offset);
                 continue;
@@ -62,8 +71,27 @@ fn main() {
 
         reader.consume(offset);
 
-        let frame =
-            Ieee802154Frame::from_bytes_without_fcs(&frame_data).expect("Failed to parse frame");
+        // Figure out if the FCS is present via the first frame
+        if fcs_present.is_none() {
+            fcs_present = match Ieee802154Frame::from_bytes(&frame_data.clone()) {
+                Ok(_) => Some(true),
+                Err(_) => {
+                    Ieee802154Frame::from_bytes_without_fcs(&frame_data.clone())
+                        .expect("Failed to determine FCS presence from first frame");
+                    Some(false)
+                }
+            };
+
+            println!("FCS present: {:?}", fcs_present.unwrap());
+        }
+
+        let frame = if fcs_present.unwrap() {
+            Ieee802154Frame::from_bytes(&frame_data).expect("Failed to parse frame")
+        } else {
+            Ieee802154Frame::from_bytes_without_fcs(&frame_data).expect("Failed to parse frame")
+        };
+
+        total_frames += 1;
 
         // 802.15.4 encrypted frames can't be Zigbee NWK
         if frame.frame_control.security_enabled {
@@ -85,6 +113,8 @@ fn main() {
             }
         };
 
+        nwk_frames += 1;
+
         let mut decrypted: Option<NwkFrame> = None;
 
         if !nwk_frame.encrypted {
@@ -104,9 +134,22 @@ fn main() {
         }
 
         if decrypted.is_none() {
-            //println!("Failed to decrypt frame: {:?}", nwk_frame);
+            decrypted_frames_failure += 1;
+            //println!("{color_red}Failed to decrypt raw frame #{}: {:#?}{color_reset}", total_frames, frame_data);
+            //println!("{color_red}Failed to decrypt 802.15.4 frame #{}: {:#?}{color_reset}", total_frames, frame);
+            //println!("{color_red}Failed to decrypt frame #{}: {:#?}{color_reset}", total_frames, nwk_frame);
+            //println!("\n\n\n\n\n==============================================================================================================================================================================\n\n\n\n\n");
         } else {
-            //println!("Decrypted frame: {:?}", decrypted.unwrap());
+            decrypted_frames_success += 1;
+            //println!("{color_green}Decrypted frame {}: {:#?}{color_reset}", total_frames, nwk_frame);
+            //println!("\n\n\n\n\n==============================================================================================================================================================================\n\n\n\n\n");
         }
     }
+
+    println!("Processed {} 802.15.4 frames", total_frames);
+    println!("Processed {} Zigbee NWK frames", nwk_frames);
+    println!(
+        "Decrypted {} frames, with {} failures",
+        decrypted_frames_success, decrypted_frames_failure
+    );
 }

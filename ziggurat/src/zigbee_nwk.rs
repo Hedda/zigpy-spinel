@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::types::{Key, EUI64, NWK};
+use crate::types::{format_hex, Key, EUI64, NWK};
 
 use std::convert::TryFrom;
 
@@ -12,6 +12,8 @@ use aes::Block;
 use cbc::cipher::BlockCipherEncrypt;
 use cbc::Encryptor;
 use constant_time_eq::constant_time_eq;
+
+use derivative::Derivative;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum NwkFrameType {
@@ -500,10 +502,12 @@ impl<const L: usize, const M: usize> NwkCrypto<L, M> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Derivative)]
+#[derivative(Debug, Clone, PartialEq)]
 pub struct NwkFrame {
     pub nwk_header: NwkHeader,
     pub aux_header: Option<NwkAuxHeader>,
+    #[derivative(Debug(format_with = "format_hex"))]
     pub payload: Vec<u8>,
     pub encrypted: bool,
 }

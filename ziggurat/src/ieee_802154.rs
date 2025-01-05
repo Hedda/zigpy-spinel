@@ -1,4 +1,6 @@
-use crate::types::{EUI64, NWK};
+use crate::types::{format_hex, EUI64, NWK};
+
+use derivative::Derivative;
 use std::convert::TryFrom;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -43,7 +45,7 @@ impl TryFrom<u8> for Ieee802154AddressingMode {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub struct Ieee802154FrameControl {
     pub frame_type: Ieee802154FrameType,
     pub security_enabled: bool,
@@ -146,7 +148,8 @@ pub enum Ieee802154Address {
     EUI64(EUI64),
 }
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug, PartialEq)]
 pub struct Ieee802154Frame {
     pub frame_control: Ieee802154FrameControl,
     pub sequence_number: Option<u8>,
@@ -154,6 +157,7 @@ pub struct Ieee802154Frame {
     pub dest_address: Option<Ieee802154Address>,
     pub src_pan_id: Option<u16>,
     pub src_address: Option<Ieee802154Address>,
+    #[derivative(Debug(format_with = "format_hex"))]
     pub payload: Vec<u8>,
     pub fcs: u16,
 }
@@ -165,22 +169,23 @@ impl Ieee802154Frame {
         }
 
         let fcs = u16::from_le_bytes([data[data.len() - 2], data[data.len() - 1]]);
-        let data = &data[..data.len() - 2];
+        let mut remaining = &data[..data.len() - 2];
 
-        if Self::compute_fcs(data) != fcs {
+        if Self::compute_fcs(remaining) != fcs {
             return Err("Invalid FCS");
         }
 
         let mut offset = 0;
 
         // Parse frame control
-        let (frame_control, remaining) = Ieee802154FrameControl::deserialize(data)?;
+        let frame_control;
+        (frame_control, remaining) = Ieee802154FrameControl::deserialize(data)?;
 
         // Parse sequence number
         let sequence_number = if frame_control.sequence_number_suppression {
             None
         } else {
-            Some(remaining[0])
+            Some(remaining[offset])
         };
 
         offset += if frame_control.sequence_number_suppression {
@@ -263,7 +268,7 @@ impl Ieee802154Frame {
         };
 
         // Remaining bytes are payload
-        let payload = remaining[offset..].to_vec();
+        let payload = remaining[offset..remaining.len() - 2].to_vec();
 
         Ok(Self {
             frame_control,
@@ -348,6 +353,7 @@ impl Ieee802154Frame {
 #[cfg(test)]
 mod test {
     use super::*;
+    use hex_literal::hex;
 
     #[test]
     fn test_frame_control() {
@@ -468,5 +474,36 @@ mod test {
         assert_eq!(frame.fcs, 0x72BC);
 
         assert_eq!(frame.to_bytes(), bytes);
+    }
+
+    #[test]
+    fn test_frame_data2() {
+        let bytes = hex!("618834efbe909d443e48020000443e1eb4287cc54700e095dd0c018817000033a8fc4eb11941104ea261f13064f175f477d311e62736b708a6a390a4f8b120df6cd3ec5c244681");
+        let frame = Ieee802154Frame::from_bytes(&bytes).unwrap();
+
+        let expected_frame = Ieee802154Frame {
+            frame_control: Ieee802154FrameControl {
+                frame_type: Ieee802154FrameType::Data,
+                security_enabled: false,
+                frame_pending: false,
+                ack_request: true,
+                pan_id_compression: true,
+                reserved: false,
+                sequence_number_suppression: false,
+                information_elements_present: false,
+                dest_addr_mode: Ieee802154AddressingMode::Short,
+                frame_version: 0,
+                src_addr_mode: Ieee802154AddressingMode::Short,
+            },
+            sequence_number: Some(52),
+            dest_pan_id: Some(0xBEEF),
+            dest_address: Some(Ieee802154Address::NWK(NWK(0x9D90))),
+            src_pan_id: Some(0xBEEF),
+            src_address: Some(Ieee802154Address::NWK(NWK(0x3E44))),
+            payload: hex!("48020000443e1eb4287cc54700e095dd0c018817000033a8fc4eb11941104ea261f13064f175f477d311e62736b708a6a390a4f8b120df6cd3ec5c24").to_vec(),
+            fcs: 0x8146,
+        };
+
+        assert_eq!(frame, expected_frame);
     }
 }
