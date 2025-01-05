@@ -471,8 +471,6 @@ impl<const L: usize, const M: usize> NwkCrypto<L, M> {
         tagged_plaintext_blocks.extend(right_pad_to_multiple_of_16(mac_tag));
         tagged_plaintext_blocks.extend(right_pad_to_multiple_of_16(plaintext));
 
-        println!("Tagged plaintext blocks: {:#?}", tagged_plaintext_blocks);
-
         let mut tagged_ciphertext_blocks = Vec::<Block>::new();
         let mut buffer_block = Block::default();
 
@@ -487,8 +485,6 @@ impl<const L: usize, const M: usize> NwkCrypto<L, M> {
             cipher.encrypt_block_b2b(&mut counter_block, &mut buffer_block);
             tagged_ciphertext_blocks.push(Block::from_fn(|i| buffer_block[i] ^ plaintext_block[i]));
         }
-
-        println!("Tagged ciphertext blocks: {:#?}", tagged_ciphertext_blocks);
 
         // The first M bytes of the first block is the "encrypted_mac_tag":
         let mut encrypted_mac_tag = [0; M];
