@@ -134,3 +134,59 @@ impl ApsFrame {
         bytes
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use hex_literal::hex;
+
+    #[test]
+    fn test_nwk_decryption_unicast() {
+        let aps_frame = ApsFrame::from_bytes(&hex!("00010600040101a9015701")).unwrap();
+
+        let expected_aps_frame = ApsFrame {
+            frame_control: ApsFrameControl {
+                frame_type: ApsFrameType::Data,
+                delivery_mode: ApsDeliveryMode::Unicast,
+                reserved: 0b0,
+                security: false,
+                ack_request: false,
+                extended_header: false,
+            },
+            destination_endpoint: 1,
+            cluster_id: 0x0006,
+            profile_id: 0x0104,
+            source_endpoint: 1,
+            counter: 169,
+            asdu: hex!("015701").to_vec(),
+        };
+
+        assert_eq!(aps_frame, expected_aps_frame);
+    }
+
+
+    #[test]
+    fn test_nwk_decryption_broadcast() {
+        let aps_frame = ApsFrame::from_bytes(&hex!("080013000000000000426b4fdeb726004b12008e")).unwrap();
+
+        let expected_aps_frame = ApsFrame {
+            frame_control: ApsFrameControl {
+                frame_type: ApsFrameType::Data,
+                delivery_mode: ApsDeliveryMode::Broadcast,
+                reserved: 0b0,
+                security: false,
+                ack_request: false,
+                extended_header: false,
+            },
+            destination_endpoint: 0,
+            cluster_id: 0x0013,
+            profile_id: 0x0000,
+            source_endpoint: 0,
+            counter: 0,
+            asdu: hex!("00426b4fdeb726004b12008e").to_vec(),
+        };
+
+        assert_eq!(aps_frame, expected_aps_frame);
+    }
+
+}
