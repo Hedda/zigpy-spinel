@@ -1,11 +1,9 @@
 #![allow(dead_code)]
 
-use std::fmt;
+use crate::types::{NWK, EUI64, Key};
 
 use std::convert::TryFrom;
-use constant_time_eq::constant_time_eq;
 
-use hex;
 use cbc::Encryptor;
 use aes::Block;
 use aes::Aes128;
@@ -13,88 +11,7 @@ use aes::cipher::KeyInit;
 use aes::cipher::KeyIvInit;
 use aes::cipher::BlockModeEncrypt;
 use cbc::cipher::BlockCipherEncrypt;
-
-
-#[derive(PartialEq, Copy, Clone)]
-pub struct NWK(pub u16);
-
-impl NWK {
-    pub fn deserialize(bytes: &[u8]) -> Result<(Self, &[u8]), &'static str> {
-        if bytes.len() < 2 {
-            return Err("Not enough data to parse NWK");
-        }
-
-        Ok((Self(u16::from_le_bytes([bytes[0], bytes[1]])), &bytes[2..]))
-    }
-
-    pub fn to_bytes(&self) -> [u8; 2] {
-        self.0.to_le_bytes()
-    }
-}
-
-impl fmt::Debug for NWK {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("NWK")
-            .field(&format_args!("{:#04x}", self.0))
-            .finish()
-    }
-}
-
-
-#[derive(PartialEq, Copy, Clone)]
-pub struct EUI64(pub [u8; 8]);
-
-impl EUI64 {
-    pub fn from_hex(text: &str) -> Self {
-        // Strip off colons and a 0x prefix, if present
-        let text = text.replace(":", "").replace("0x", "");
-
-        if text.len() != 16 {
-            panic!("Invalid EUI64 length");
-        }
-
-        let mut eui64 = [0; 8];
-        hex::decode_to_slice(text, &mut eui64).expect("Decoding failed");
-
-        eui64.reverse();
-
-        Self(eui64)
-    }
-
-    pub fn deserialize(bytes: &[u8]) -> Result<(Self, &[u8]), &'static str> {
-        if bytes.len() < 8 {
-            return Err("Not enough data to parse EUI64");
-        }
-
-        let mut eui = [0; 8];
-        eui.copy_from_slice(&bytes[..8]);
-
-        Ok((Self(eui), &bytes[8..]))
-    }
-
-    pub fn to_bytes(&self) -> [u8; 8] {
-        self.0
-    }
-}
-
-
-impl fmt::Debug for EUI64 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("EUI64")
-            .field(&format_args!(
-                "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7]
-            ))
-            .finish()
-    }
-}
-
-
-#[derive(Debug, PartialEq, Copy, Clone)]
-pub enum Address {
-    NWK(NWK),
-    EUI64(EUI64),
-}
+use constant_time_eq::constant_time_eq;
 
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -475,54 +392,6 @@ impl NwkAuxHeader {
 }
 
 
-#[derive(Clone, PartialEq)]
-pub struct Key(pub [u8; 16]);
-
-impl Key {
-    pub fn from_hex(text: &str) -> Self {
-        // Strip off colons and a 0x prefix, if present
-        let text = text.replace(":", "").replace("0x", "");
-
-        if text.len() != 32 {
-            panic!("Invalid EUI64 length");
-        }
-
-        let mut key = [0; 16];
-        hex::decode_to_slice(text, &mut key).expect("Decoding failed");
-
-        Self(key)
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() != 16 {
-            return Err("Invalid key length");
-        }
-
-        let mut key = [0; 16];
-        key.copy_from_slice(&bytes);
-
-        Ok(Self(key))
-    }
-
-    pub fn to_bytes(&self) -> [u8; 16] {
-        self.0
-    }
-}
-
-
-impl fmt::Debug for Key {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Key")
-            .field(&format_args!(
-                "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7],
-                self.0[8], self.0[9], self.0[10], self.0[11], self.0[12], self.0[13], self.0[14], self.0[15]
-            ))
-            .finish()
-    }
-}
-
-
 fn right_pad_to_multiple_of_16(data: &[u8]) -> Vec<Block> {
     // Pre-allocate enough blocks
     let mut blocks = Vec::<Block>::with_capacity((data.len() + 15) / 16);
@@ -782,138 +651,5 @@ impl NwkFrame {
                 encrypted: true,
             }
         )
-    }
-}
-
-
-#[derive(Debug, PartialEq, Copy, Clone)]
-pub enum ApsFrameType {
-    Data = 0b00,
-    Command = 0b10,
-}
-
-impl TryFrom<u8> for ApsFrameType {
-    type Error = &'static str;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0b00 => Ok(ApsFrameType::Data),
-            0b10 => Ok(ApsFrameType::Command),
-            _ => Err("Invalid APS frame type"),
-        }
-    }
-}
-
-
-#[derive(Debug, PartialEq, Copy, Clone)]
-pub enum ApsDeliveryMode {
-    Unicast = 0b00,
-    Broadcast = 0b10,
-}
-
-impl TryFrom<u8> for ApsDeliveryMode {
-    type Error = &'static str;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0b00 => Ok(ApsDeliveryMode::Unicast),
-            0b10 => Ok(ApsDeliveryMode::Broadcast),
-            _ => Err("Invalid APS delivery mode"),
-        }
-    }
-}
-
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ApsFrameControl {
-    pub frame_type: ApsFrameType,
-    pub delivery_mode: ApsDeliveryMode,
-    pub reserved: u8,
-    pub security: bool,
-    pub ack_request: bool,
-    pub extended_header: bool,
-}
-
-impl ApsFrameControl {
-    pub fn deserialize(bytes: &[u8]) -> Result<(Self, &[u8]), &'static str> {
-        if bytes.len() < 1 {
-            return Err("Not enough data to parse ApsFrameControl");
-        }
-
-        Ok(
-            (Self {
-                frame_type: ApsFrameType::try_from((bytes[0] >> 0) & 0b11)?,
-                delivery_mode: ApsDeliveryMode::try_from((bytes[0] >> 2) & 0b11)?,
-                reserved: (bytes[0] >> 4) & 0b1,
-                security: (bytes[0] >> 5) & 0b1 == 1,
-                ack_request: (bytes[0] >> 6) & 0b1 == 1,
-                extended_header: (bytes[0] >> 7) & 0b1 == 1,
-            }, &bytes[1..])
-        )
-    }
-
-    pub fn to_bytes(&self) -> [u8; 1] {
-        [
-            (((self.frame_type as u8) & 0b11) << 0)
-          | (((self.delivery_mode as u8) & 0b11) << 2)
-          | (((self.reserved as u8) & 0b1) << 4)
-          | (((self.security as u8) & 0b1) << 5)
-          | (((self.ack_request as u8) & 0b1) << 6)
-          | (((self.extended_header as u8) & 0b1) << 7)
-        ]
-    }
-}
-
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ApsFrame {
-    pub frame_control: ApsFrameControl,
-    pub destination_endpoint: u8,
-    pub cluster_id: u16,
-    pub profile_id: u16,
-    pub source_endpoint: u8,
-    pub counter: u8,
-    pub asdu: Vec<u8>,
-}
-
-impl ApsFrame {
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
-        if bytes.len() < 8 {
-            return Err("Not enough data to parse ApsFrame");
-        }
-
-        let (frame_control, remaining) = ApsFrameControl::deserialize(bytes)?;
-        let destination_endpoint = u8::from_le_bytes([remaining[0]]);
-        let cluster_id = u16::from_le_bytes([remaining[1], remaining[2]]);
-        let profile_id = u16::from_le_bytes([remaining[3], remaining[4]]);
-        let source_endpoint = u8::from_le_bytes([remaining[5]]);
-        let counter = u8::from_le_bytes([remaining[6]]);
-        let asdu = remaining[7..].to_vec();
-
-        Ok(
-            Self {
-                frame_control: frame_control,
-                destination_endpoint: destination_endpoint,
-                cluster_id: cluster_id,
-                profile_id: profile_id,
-                source_endpoint: source_endpoint,
-                counter: counter,
-                asdu: asdu,
-            }
-        )
-    }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-
-        bytes.extend(self.frame_control.to_bytes());
-        bytes.extend(self.destination_endpoint.to_be_bytes());
-        bytes.extend(self.cluster_id.to_be_bytes());
-        bytes.extend(self.profile_id.to_be_bytes());
-        bytes.extend(self.source_endpoint.to_be_bytes());
-        bytes.extend(self.counter.to_be_bytes());
-        bytes.extend(self.asdu.clone());
-
-        bytes
     }
 }

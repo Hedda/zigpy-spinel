@@ -1,0 +1,132 @@
+use std::fmt;
+use hex;
+
+
+#[derive(PartialEq, Copy, Clone)]
+pub struct NWK(pub u16);
+
+impl NWK {
+    pub fn deserialize(bytes: &[u8]) -> Result<(Self, &[u8]), &'static str> {
+        if bytes.len() < 2 {
+            return Err("Not enough data to parse NWK");
+        }
+
+        Ok((Self(u16::from_le_bytes([bytes[0], bytes[1]])), &bytes[2..]))
+    }
+
+    pub fn to_bytes(&self) -> [u8; 2] {
+        self.0.to_le_bytes()
+    }
+}
+
+impl fmt::Debug for NWK {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("NWK")
+            .field(&format_args!("{:#04x}", self.0))
+            .finish()
+    }
+}
+
+
+#[derive(PartialEq, Copy, Clone)]
+pub struct EUI64(pub [u8; 8]);
+
+impl EUI64 {
+    pub fn from_hex(text: &str) -> Self {
+        // Strip off colons and a 0x prefix, if present
+        let text = text.replace(":", "").replace("0x", "");
+
+        if text.len() != 16 {
+            panic!("Invalid EUI64 length");
+        }
+
+        let mut eui64 = [0; 8];
+        hex::decode_to_slice(text, &mut eui64).expect("Decoding failed");
+
+        eui64.reverse();
+
+        Self(eui64)
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> Result<(Self, &[u8]), &'static str> {
+        if bytes.len() < 8 {
+            return Err("Not enough data to parse EUI64");
+        }
+
+        let mut eui = [0; 8];
+        eui.copy_from_slice(&bytes[..8]);
+
+        Ok((Self(eui), &bytes[8..]))
+    }
+
+    pub fn to_bytes(&self) -> [u8; 8] {
+        self.0
+    }
+}
+
+
+impl fmt::Debug for EUI64 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("EUI64")
+            .field(&format_args!(
+                "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7]
+            ))
+            .finish()
+    }
+}
+
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub enum Address {
+    NWK(NWK),
+    EUI64(EUI64),
+}
+
+
+#[derive(Clone, PartialEq)]
+pub struct Key(pub [u8; 16]);
+
+impl Key {
+    pub fn from_hex(text: &str) -> Self {
+        // Strip off colons and a 0x prefix, if present
+        let text = text.replace(":", "").replace("0x", "");
+
+        if text.len() != 32 {
+            panic!("Invalid EUI64 length");
+        }
+
+        let mut key = [0; 16];
+        hex::decode_to_slice(text, &mut key).expect("Decoding failed");
+
+        Self(key)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        if bytes.len() != 16 {
+            return Err("Invalid key length");
+        }
+
+        let mut key = [0; 16];
+        key.copy_from_slice(&bytes);
+
+        Ok(Self(key))
+    }
+
+    pub fn to_bytes(&self) -> [u8; 16] {
+        self.0
+    }
+}
+
+
+impl fmt::Debug for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Key")
+            .field(&format_args!(
+                "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7],
+                self.0[8], self.0[9], self.0[10], self.0[11], self.0[12], self.0[13], self.0[14], self.0[15]
+            ))
+            .finish()
+    }
+}
