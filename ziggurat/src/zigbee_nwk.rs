@@ -17,6 +17,7 @@ use constant_time_eq::constant_time_eq;
 pub enum NwkFrameType {
     Data = 0b00,
     Command = 0b01,
+    Interpan = 0b11,
 }
 
 impl TryFrom<u8> for NwkFrameType {
@@ -26,6 +27,7 @@ impl TryFrom<u8> for NwkFrameType {
         match value {
             0b00 => Ok(NwkFrameType::Data),
             0b01 => Ok(NwkFrameType::Command),
+            0b11 => Ok(NwkFrameType::Interpan),
             _ => Err("Invalid frame type"),
         }
     }

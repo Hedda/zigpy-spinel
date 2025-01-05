@@ -227,9 +227,7 @@ impl Ieee802154Frame {
         // Parse source PAN ID
         let src_pan_id = if frame_control.pan_id_compression {
             dest_pan_id
-        } else if (frame_control.frame_type == Ieee802154FrameType::Data)
-            || (frame_control.frame_type == Ieee802154FrameType::Command)
-        {
+        } else if frame_control.frame_type == Ieee802154FrameType::Data {
             let pan_id = u16::from_le_bytes([remaining[offset], remaining[offset + 1]]);
             offset += 2;
             Some(pan_id)
@@ -277,6 +275,14 @@ impl Ieee802154Frame {
             payload,
             fcs,
         })
+    }
+
+    pub fn from_bytes_without_fcs(data: &[u8]) -> Result<Self, &'static str> {
+        let mut data_with_fcs = Vec::new();
+        data_with_fcs.extend(data);
+        data_with_fcs.extend(&Self::compute_fcs(data).to_le_bytes());
+
+        Self::from_bytes(&data_with_fcs)
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {

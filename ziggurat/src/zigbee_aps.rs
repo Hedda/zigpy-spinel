@@ -6,6 +6,7 @@ use std::convert::TryFrom;
 pub enum ApsFrameType {
     Data = 0b00,
     Command = 0b10,
+    Interpan = 0b11,
 }
 
 impl TryFrom<u8> for ApsFrameType {
@@ -15,6 +16,7 @@ impl TryFrom<u8> for ApsFrameType {
         match value {
             0b00 => Ok(ApsFrameType::Data),
             0b10 => Ok(ApsFrameType::Command),
+            0b11 => Ok(ApsFrameType::Interpan),
             _ => Err("Invalid APS frame type"),
         }
     }

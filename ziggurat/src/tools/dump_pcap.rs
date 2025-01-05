@@ -1,8 +1,7 @@
-use std::env;
 use std::fs::File;
 
-use pcap_parser::traits::PcapReaderIterator;
-use pcap_parser::{LegacyPcapReader, PcapBlockOwned, PcapError};
+use inline_colorization::*;
+use pcap_parser::{create_reader, PcapBlockOwned, PcapError};
 use shellexpand;
 
 use ziggurat::ieee_802154::{Ieee802154Frame, Ieee802154FrameType};
@@ -38,66 +37,76 @@ fn main() {
 
     let file = File::open(pcap).expect("failed to open pcap file");
 
-    let mut reader = LegacyPcapReader::new(65536, file).expect("Failed to create reader");
+    let mut reader = create_reader(65536, file).expect("LegacyPcapReader");
 
     loop {
-        match reader.next() {
-            Ok((offset, block)) => {
-                match block {
-                    PcapBlockOwned::LegacyHeader(hdr) => {
-                        println!("Block header: {:?}", hdr);
-                    }
-
-                    PcapBlockOwned::Legacy(block) => {
-                        let frame = Ieee802154Frame::from_bytes(&block.data)
-                            .expect("Failed to parse frame");
-
-                        if frame.frame_control.frame_type == Ieee802154FrameType::Data {
-                            let nwk_frame = NwkFrame::from_bytes(&frame.payload)
-                                .expect("Failed to parse NWK frame");
-                            let mut decrypted = None;
-
-                            for (index, key) in keys.iter().enumerate() {
-                                match nwk_frame.decrypt(&key) {
-                                    Ok(decrypted_frame) => {
-                                        // Swap the first key with this one for efficiency
-                                        let temp = keys[0].clone();
-                                        keys[0] = keys[index].clone();
-                                        keys[index] = temp;
-
-                                        decrypted = Some(decrypted_frame);
-                                        break;
-                                    }
-
-                                    Err(_) => {
-                                        continue;
-                                    }
-                                }
-                            }
-
-                            if decrypted.is_none() {
-                                println!("Failed to decrypt frame: {:?}", nwk_frame);
-                            } else {
-                                println!("Decrypted frame: {:?}", decrypted.unwrap());
-                            }
-                        }
-                    }
-
-                    _ => {
-                        panic!("Unexpected block type");
-                    }
-                }
-
-                reader.consume(offset);
-            }
-
+        let (offset, block) = match reader.next() {
+            Ok((offset, block)) => (offset, block),
             Err(PcapError::Incomplete(_)) => {
                 reader.refill().unwrap();
+                continue;
             }
-
             Err(PcapError::Eof) => break,
-
             Err(e) => panic!("error while reading: {:?}", e),
+        };
+
+        let frame_data = match block {
+            PcapBlockOwned::Legacy(legacy_block) => legacy_block.data.to_vec(),
+            PcapBlockOwned::NG(pcap_parser::Block::EnhancedPacket(packet)) => packet.data.to_vec(),
+            PcapBlockOwned::NG(pcap_parser::Block::SimplePacket(packet)) => packet.data.to_vec(),
+            _ => {
+                reader.consume(offset);
+                continue;
+            }
+        };
+
+        reader.consume(offset);
+
+        let frame =
+            Ieee802154Frame::from_bytes_without_fcs(&frame_data).expect("Failed to parse frame");
+
+        // 802.15.4 encrypted frames can't be Zigbee NWK
+        if frame.frame_control.security_enabled {
+            continue;
+        }
+
+        if frame.frame_control.frame_type != Ieee802154FrameType::Data {
+            continue;
+        }
+
+        let nwk_frame = match NwkFrame::from_bytes(&frame.payload) {
+            Ok(nwk_frame) => nwk_frame,
+            Err(_) => {
+                println!(
+                    "{color_red}Failed to parse frame, maybe not Zigbee NWK? {:?}{color_reset}",
+                    frame.payload
+                );
+                continue;
+            }
+        };
+
+        let mut decrypted: Option<NwkFrame> = None;
+
+        if !nwk_frame.encrypted {
+            decrypted = Some(nwk_frame.clone()); // Why clone??
+        } else {
+            for (index, key) in keys.iter().enumerate() {
+                match nwk_frame.decrypt(&key) {
+                    Ok(decrypted_frame) => {
+                        // Swap the first key with this one for efficiency
+                        keys.swap(0, index);
+                        decrypted = Some(decrypted_frame);
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+        }
+
+        if decrypted.is_none() {
+            //println!("Failed to decrypt frame: {:?}", nwk_frame);
+        } else {
+            //println!("Decrypted frame: {:?}", decrypted.unwrap());
         }
     }
 }
