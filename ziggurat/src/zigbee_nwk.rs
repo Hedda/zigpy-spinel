@@ -110,6 +110,7 @@ impl NwkFrameControl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NwkSourceRoute {
+    pub relay_count: u8, // Technically unnecessary to store but maybe we'll need it
     pub relay_index: u8,
     pub relays: Vec<Nwk>,
 }
@@ -120,8 +121,8 @@ impl NwkSourceRoute {
             return Err("Not enough data to parse NwkSourceRoute");
         }
 
-        let relay_index = bytes[0];
-        let relay_count = bytes[1];
+        let relay_count = bytes[0];
+        let relay_index = bytes[1];
         let mut remaining = &bytes[2..];
 
         let mut relays = Vec::new();
@@ -134,6 +135,7 @@ impl NwkSourceRoute {
 
         Ok((
             Self {
+                relay_count: relay_count,
                 relay_index: relay_index,
                 relays: relays,
             },
@@ -142,10 +144,14 @@ impl NwkSourceRoute {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
+        if self.relay_count != self.relays.len() as u8 {
+            panic!("Relay count does not match number of relays");
+        }
+
         let mut bytes = Vec::new();
 
+        bytes.push(self.relay_count);
         bytes.push(self.relay_index);
-        bytes.push(self.relays.len() as u8);
 
         for nwk in &self.relays {
             bytes.extend(nwk.to_bytes());
@@ -175,12 +181,14 @@ impl NwkHeader {
         }
 
         let mut remaining = bytes;
-        let frame_control;
-        let destination;
-        let source;
 
+        let frame_control;
         (frame_control, remaining) = NwkFrameControl::deserialize(remaining)?;
+
+        let destination;
         (destination, remaining) = Nwk::deserialize(remaining)?;
+
+        let source;
         (source, remaining) = Nwk::deserialize(remaining)?;
 
         let radius = remaining[0];
@@ -735,5 +743,81 @@ mod test {
         };
 
         assert_eq!(decrypted_nwk_frame, expected_decrypted_nwk_frame);
+
+        // Make sure encryption is round trip
+        let re_encrypted_nwk_frame = decrypted_nwk_frame.encrypt(&key).unwrap();
+        assert_eq!(nwk_frame.to_bytes(), bytes);
+        assert_eq!(re_encrypted_nwk_frame, nwk_frame);
+        assert_eq!(re_encrypted_nwk_frame.to_bytes(), bytes);
+    }
+
+    #[test]
+    fn test_source_route() {
+        let bytes =
+            hex!("0806e73c375f1dcc010039f9287ea30000023c710c01881700000b73db5468c7cbc47caf8705");
+        let nwk_frame = NwkFrame::from_bytes(&bytes).unwrap();
+
+        let expected_nwk_frame = NwkFrame {
+            encrypted: true,
+            nwk_header: NwkHeader {
+                frame_control: NwkFrameControl {
+                    frame_type: NwkFrameType::Data,
+                    protocol_version: 2,
+                    discover_route: NwkRouteDiscovery::Suppress,
+                    multicast: false,
+                    security: true,
+                    source_route: true,
+                    destination: false,
+                    extended_source: false,
+                    end_device_initiator: false,
+                    reserved: 0b00,
+                },
+                destination: Nwk(0x3ce7),
+                source: Nwk(0x5f37),
+                radius: 29,
+                sequence_number: 204,
+                destination_ieee: None,
+                source_ieee: None,
+                multicast_control: None,
+                source_route: Some(NwkSourceRoute {
+                    relay_count: 1,
+                    relay_index: 0,
+                    relays: vec![Nwk(0xf939)],
+                }),
+            },
+            aux_header: Some(NwkAuxHeader {
+                security_control: NwkSecurityHeaderControlField {
+                    security_level: NwkSecurityLevel::NoSecurity,
+                    key_id: NwkSecurityHeaderKeyId::NetworkKey,
+                    extended_source: true,
+                    require_verified_frame_counter: false,
+                    reserved: 0b0,
+                },
+                frame_counter: 41854,
+                extended_source: Some(Eui64::from_hex("00:17:88:01:0c:71:3c:02")),
+                key_sequence_number: 0,
+            }),
+            payload: hex!("0b73db5468c7cbc47caf8705").to_vec(),
+        };
+
+        assert_eq!(nwk_frame, expected_nwk_frame);
+
+        let key = Key::from_hex("31908c7c51c2f01552bc90cc16e5443d");
+        let decrypted_nwk_frame = nwk_frame.decrypt(&key).unwrap();
+
+        let expected_decrypted_nwk_frame = NwkFrame {
+            encrypted: false,
+            nwk_header: expected_nwk_frame.nwk_header,
+            aux_header: expected_nwk_frame.aux_header,
+            payload: hex!("020106000401405b").to_vec(),
+        };
+
+        assert_eq!(decrypted_nwk_frame, expected_decrypted_nwk_frame);
+
+        // Make sure encryption is round trip
+        let re_encrypted_nwk_frame = decrypted_nwk_frame.encrypt(&key).unwrap();
+        assert_eq!(nwk_frame.to_bytes(), bytes);
+        assert_eq!(re_encrypted_nwk_frame, nwk_frame);
+        assert_eq!(re_encrypted_nwk_frame.to_bytes(), bytes);
     }
 }
