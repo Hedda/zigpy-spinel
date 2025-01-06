@@ -245,8 +245,8 @@ class SpinelProtocol(SerialProtocol):
             self.remove_property_listener(property_id, queue.put_nowait)
 
     async def wait_for_property(self, property_id: PropertyID, value: bytes) -> None:
-        async for value in self.iter_property_changes(property_id):
-            if value == value:
+        async for changed_value in self.iter_property_changes(property_id):
+            if changed_value == value:
                 return
 
     async def reset(
