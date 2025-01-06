@@ -84,27 +84,20 @@ impl Ieee802154FrameControl {
         ))
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-
-        bytes.push(
+    pub fn to_bytes(&self) -> [u8; 2] {
+        [
             ((self.frame_type as u8) << 0)
                 | ((self.security_enabled as u8) << 3)
                 | ((self.frame_pending as u8) << 4)
                 | ((self.ack_request as u8) << 5)
                 | ((self.pan_id_compression as u8) << 6)
                 | ((self.reserved as u8) << 7),
-        );
-
-        bytes.push(
             ((self.sequence_number_suppression as u8) << 0)
                 | ((self.information_elements_present as u8) << 1)
                 | ((self.dest_addr_mode as u8) << 2)
                 | ((self.frame_version as u8) << 4)
                 | ((self.src_addr_mode as u8) << 6),
-        );
-
-        bytes
+        ]
     }
 }
 
