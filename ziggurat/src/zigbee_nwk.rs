@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::types::{format_hex, Key, EUI64, NWK};
+use crate::types::{format_hex, Eui64, Key, Nwk};
 
 use std::convert::TryFrom;
 
@@ -111,15 +111,15 @@ impl NwkFrameControl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct NwkHeader {
     pub frame_control: NwkFrameControl,
-    pub destination: NWK,
-    pub source: NWK,
+    pub destination: Nwk,
+    pub source: Nwk,
     pub radius: u8,
     pub sequence_number: u8,
-    pub destination_ieee: Option<EUI64>,
-    pub source_ieee: Option<EUI64>,
+    pub destination_ieee: Option<Eui64>,
+    pub source_ieee: Option<Eui64>,
     pub multicast_control: Option<u8>,
     pub source_route_relay_index: Option<u8>,
-    pub source_route: Option<Vec<NWK>>,
+    pub source_route: Option<Vec<Nwk>>,
 }
 
 impl NwkHeader {
@@ -134,8 +134,8 @@ impl NwkHeader {
         let source;
 
         (frame_control, remaining) = NwkFrameControl::deserialize(remaining)?;
-        (destination, remaining) = NWK::deserialize(remaining)?;
-        (source, remaining) = NWK::deserialize(remaining)?;
+        (destination, remaining) = Nwk::deserialize(remaining)?;
+        (source, remaining) = Nwk::deserialize(remaining)?;
 
         let radius = remaining[0];
         let sequence_number = remaining[1];
@@ -149,13 +149,13 @@ impl NwkHeader {
 
         if frame_control.destination {
             let ieee;
-            (ieee, remaining) = EUI64::deserialize(remaining)?;
+            (ieee, remaining) = Eui64::deserialize(remaining)?;
             destination_ieee = Some(ieee);
         }
 
         if frame_control.extended_source {
             let ieee;
-            (ieee, remaining) = EUI64::deserialize(remaining)?;
+            (ieee, remaining) = Eui64::deserialize(remaining)?;
             source_ieee = Some(ieee);
         }
 
@@ -173,7 +173,7 @@ impl NwkHeader {
 
             for _ in 0..relay_count {
                 let nwk;
-                (nwk, remaining) = NWK::deserialize(remaining)?;
+                (nwk, remaining) = Nwk::deserialize(remaining)?;
                 temp_source_route.push(nwk);
             }
 
@@ -255,7 +255,7 @@ impl TryFrom<u8> for NwkSecurityHeaderKeyId {
             0x01 => Ok(NwkSecurityHeaderKeyId::NetworkKey),
             0x02 => Ok(NwkSecurityHeaderKeyId::KeyTransportKey),
             0x03 => Ok(NwkSecurityHeaderKeyId::KeyLoadKey),
-            _ => Err("Invalid NWK security header key ID"),
+            _ => Err("Invalid Nwk security header key ID"),
         }
     }
 }
@@ -285,7 +285,7 @@ impl TryFrom<u8> for NwkSecurityLevel {
             0x05 => Ok(NwkSecurityLevel::AesCcm32),
             0x06 => Ok(NwkSecurityLevel::AesCcm64),
             0x07 => Ok(NwkSecurityLevel::AesCcm128),
-            _ => Err("Invalid NWK security level"),
+            _ => Err("Invalid Nwk security level"),
         }
     }
 }
@@ -330,7 +330,7 @@ impl NwkSecurityHeaderControlField {
 pub struct NwkAuxHeader {
     pub security_control: NwkSecurityHeaderControlField,
     pub frame_counter: u32,
-    pub extended_source: Option<EUI64>,
+    pub extended_source: Option<Eui64>,
     pub key_sequence_number: u8,
 }
 
@@ -353,7 +353,7 @@ impl NwkAuxHeader {
 
         if security_control.extended_source {
             let ieee;
-            (ieee, remaining) = EUI64::deserialize(remaining)?;
+            (ieee, remaining) = Eui64::deserialize(remaining)?;
             extended_source = Some(ieee);
         }
 
@@ -666,8 +666,8 @@ mod test {
                     end_device_initiator: false,
                     reserved: 0b00,
                 },
-                destination: NWK(0x6b42),
-                source: NWK(0x0000),
+                destination: Nwk(0x6b42),
+                source: Nwk(0x0000),
                 radius: 15,
                 sequence_number: 46,
                 destination_ieee: None,
@@ -685,7 +685,7 @@ mod test {
                     reserved: 0b0,
                 },
                 frame_counter: 2682,
-                extended_source: Some(EUI64::from_hex("00:12:4b:00:1e:17:ef:a8")),
+                extended_source: Some(Eui64::from_hex("00:12:4b:00:1e:17:ef:a8")),
                 key_sequence_number: 0,
             }),
             payload: hex!("f7a7e37b47adb47593c8a375c98ba6").to_vec(),

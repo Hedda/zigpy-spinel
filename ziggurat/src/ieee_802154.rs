@@ -1,4 +1,4 @@
-use crate::types::{format_hex, PanId, EUI64, NWK};
+use crate::types::{format_hex, Eui64, Nwk, PanId};
 
 use derivative::Derivative;
 use std::convert::TryFrom;
@@ -137,8 +137,8 @@ impl TryFrom<u8> for Ieee802154CommandId {
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Ieee802154Address {
-    NWK(NWK),
-    EUI64(EUI64),
+    Nwk(Nwk),
+    Eui64(Eui64),
 }
 
 #[derive(Derivative)]
@@ -188,16 +188,16 @@ impl Ieee802154Frame {
                 (pan_id, remaining) = PanId::deserialize(remaining)?;
 
                 let nwk;
-                (nwk, remaining) = NWK::deserialize(remaining)?;
-                (Some(pan_id), Some(Ieee802154Address::NWK(nwk)))
+                (nwk, remaining) = Nwk::deserialize(remaining)?;
+                (Some(pan_id), Some(Ieee802154Address::Nwk(nwk)))
             }
             Ieee802154AddressingMode::Long => {
                 let pan_id;
                 (pan_id, remaining) = PanId::deserialize(remaining)?;
 
                 let eui64;
-                (eui64, remaining) = EUI64::deserialize(remaining)?;
-                (Some(pan_id), Some(Ieee802154Address::EUI64(eui64)))
+                (eui64, remaining) = Eui64::deserialize(remaining)?;
+                (Some(pan_id), Some(Ieee802154Address::Eui64(eui64)))
             }
             Ieee802154AddressingMode::None => (None, None),
         };
@@ -217,13 +217,13 @@ impl Ieee802154Frame {
         let src_address = match frame_control.src_addr_mode {
             Ieee802154AddressingMode::Short => {
                 let nwk;
-                (nwk, remaining) = NWK::deserialize(remaining)?;
-                Some(Ieee802154Address::NWK(nwk))
+                (nwk, remaining) = Nwk::deserialize(remaining)?;
+                Some(Ieee802154Address::Nwk(nwk))
             }
             Ieee802154AddressingMode::Long => {
                 let eui64;
-                (eui64, remaining) = EUI64::deserialize(remaining)?;
-                Some(Ieee802154Address::EUI64(eui64))
+                (eui64, remaining) = Eui64::deserialize(remaining)?;
+                Some(Ieee802154Address::Eui64(eui64))
             }
             _ => None,
         };
@@ -268,8 +268,8 @@ impl Ieee802154Frame {
         }
         if let Some(address) = &self.dest_address {
             data.extend(match address {
-                Ieee802154Address::NWK(addr) => addr.to_bytes().to_vec(),
-                Ieee802154Address::EUI64(addr) => addr.to_bytes().to_vec(),
+                Ieee802154Address::Nwk(addr) => addr.to_bytes().to_vec(),
+                Ieee802154Address::Eui64(addr) => addr.to_bytes().to_vec(),
             });
         }
 
@@ -282,8 +282,8 @@ impl Ieee802154Frame {
 
         if let Some(address) = &self.src_address {
             data.extend(match address {
-                Ieee802154Address::NWK(addr) => addr.to_bytes().to_vec(),
-                Ieee802154Address::EUI64(addr) => addr.to_bytes().to_vec(),
+                Ieee802154Address::Nwk(addr) => addr.to_bytes().to_vec(),
+                Ieee802154Address::Eui64(addr) => addr.to_bytes().to_vec(),
             });
         }
 
@@ -374,10 +374,10 @@ mod test {
         assert_eq!(frame.dest_pan_id, Some(PanId(0x3EF5)));
         assert_eq!(
             frame.dest_address,
-            Some(Ieee802154Address::NWK(NWK(0x5234)))
+            Some(Ieee802154Address::Nwk(Nwk(0x5234)))
         );
         assert_eq!(frame.src_pan_id, Some(PanId(0x3EF5)));
-        assert_eq!(frame.src_address, Some(Ieee802154Address::NWK(NWK(0xF663))));
+        assert_eq!(frame.src_address, Some(Ieee802154Address::Nwk(Nwk(0xF663))));
 
         assert_eq!(frame.payload, bytes[9..bytes.len() - 2]);
         assert_eq!(frame.fcs, 0xEAC5);
@@ -458,9 +458,9 @@ mod test {
             },
             sequence_number: Some(52),
             dest_pan_id: Some(PanId(0xBEEF)),
-            dest_address: Some(Ieee802154Address::NWK(NWK(0x9D90))),
+            dest_address: Some(Ieee802154Address::Nwk(Nwk(0x9D90))),
             src_pan_id: Some(PanId(0xBEEF)),
-            src_address: Some(Ieee802154Address::NWK(NWK(0x3E44))),
+            src_address: Some(Ieee802154Address::Nwk(Nwk(0x3E44))),
             payload: hex!("48020000443e1eb4287cc54700e095dd0c018817000033a8fc4eb11941104ea261f13064f175f477d311e62736b708a6a390a4f8b120df6cd3ec5c24").to_vec(),
             fcs: 0x8146,
         };

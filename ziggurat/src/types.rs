@@ -2,12 +2,12 @@ use hex;
 use std::fmt;
 
 #[derive(PartialEq, Copy, Clone)]
-pub struct NWK(pub u16);
+pub struct Nwk(pub u16);
 
-impl NWK {
+impl Nwk {
     pub fn deserialize(bytes: &[u8]) -> Result<(Self, &[u8]), &'static str> {
         if bytes.len() < 2 {
-            return Err("Not enough data to parse NWK");
+            return Err("Not enough data to parse Nwk");
         }
 
         Ok((Self(u16::from_le_bytes([bytes[0], bytes[1]])), &bytes[2..]))
@@ -18,24 +18,24 @@ impl NWK {
     }
 }
 
-impl fmt::Debug for NWK {
+impl fmt::Debug for Nwk {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("NWK")
+        f.debug_tuple("Nwk")
             .field(&format_args!("0x{:04x}", self.0))
             .finish()
     }
 }
 
 #[derive(PartialEq, Copy, Clone)]
-pub struct EUI64(pub [u8; 8]);
+pub struct Eui64(pub [u8; 8]);
 
-impl EUI64 {
+impl Eui64 {
     pub fn from_hex(text: &str) -> Self {
         // Strip off colons and a 0x prefix, if present
         let text = text.replace(":", "").replace("0x", "");
 
         if text.len() != 16 {
-            panic!("Invalid EUI64 length");
+            panic!("Invalid Eui64 length");
         }
 
         let mut eui64 = [0; 8];
@@ -48,7 +48,7 @@ impl EUI64 {
 
     pub fn deserialize(bytes: &[u8]) -> Result<(Self, &[u8]), &'static str> {
         if bytes.len() < 8 {
-            return Err("Not enough data to parse EUI64");
+            return Err("Not enough data to parse Eui64");
         }
 
         let mut eui = [0; 8];
@@ -62,9 +62,9 @@ impl EUI64 {
     }
 }
 
-impl fmt::Debug for EUI64 {
+impl fmt::Debug for Eui64 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("EUI64")
+        f.debug_tuple("Eui64")
             .field(&format_args!(
                 "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                 self.0[7],
@@ -82,8 +82,8 @@ impl fmt::Debug for EUI64 {
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Address {
-    NWK(NWK),
-    EUI64(EUI64),
+    Nwk(Nwk),
+    Eui64(Eui64),
 }
 
 #[derive(PartialEq, Copy, Clone)]
@@ -120,7 +120,7 @@ impl Key {
         let text = text.replace(":", "").replace("0x", "");
 
         if text.len() != 32 {
-            panic!("Invalid EUI64 length");
+            panic!("Invalid Eui64 length");
         }
 
         let mut key = [0; 16];
