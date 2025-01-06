@@ -109,6 +109,53 @@ impl NwkFrameControl {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct NwkSourceRoute {
+    pub relay_index: u8,
+    pub relays: Vec<Nwk>,
+}
+
+impl NwkSourceRoute {
+    pub fn deserialize(bytes: &[u8]) -> Result<(Self, &[u8]), &'static str> {
+        if bytes.len() < 2 {
+            return Err("Not enough data to parse NwkSourceRoute");
+        }
+
+        let relay_index = bytes[0];
+        let relay_count = bytes[1];
+        let mut remaining = &bytes[2..];
+
+        let mut relays = Vec::new();
+
+        for _ in 0..relay_count {
+            let nwk;
+            (nwk, remaining) = Nwk::deserialize(remaining)?;
+            relays.push(nwk);
+        }
+
+        Ok((
+            Self {
+                relay_index: relay_index,
+                relays: relays,
+            },
+            remaining,
+        ))
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        bytes.push(self.relay_index);
+        bytes.push(self.relays.len() as u8);
+
+        for nwk in &self.relays {
+            bytes.extend(nwk.to_bytes());
+        }
+
+        bytes
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct NwkHeader {
     pub frame_control: NwkFrameControl,
     pub destination: Nwk,
@@ -118,8 +165,7 @@ pub struct NwkHeader {
     pub destination_ieee: Option<Eui64>,
     pub source_ieee: Option<Eui64>,
     pub multicast_control: Option<u8>,
-    pub source_route_relay_index: Option<u8>,
-    pub source_route: Option<Vec<Nwk>>,
+    pub source_route: Option<NwkSourceRoute>,
 }
 
 impl NwkHeader {
@@ -138,60 +184,58 @@ impl NwkHeader {
         (source, remaining) = Nwk::deserialize(remaining)?;
 
         let radius = remaining[0];
-        let sequence_number = remaining[1];
-        remaining = &remaining[2..];
+        remaining = &remaining[1..];
 
-        let mut destination_ieee = None;
-        let mut source_ieee = None;
-        let mut multicast_control = None;
-        let mut source_route_relay_index = None;
-        let mut source_route = None;
+        let sequence_number = remaining[0];
+        remaining = &remaining[1..];
 
-        if frame_control.destination {
-            let ieee;
-            (ieee, remaining) = Eui64::deserialize(remaining)?;
-            destination_ieee = Some(ieee);
-        }
-
-        if frame_control.extended_source {
-            let ieee;
-            (ieee, remaining) = Eui64::deserialize(remaining)?;
-            source_ieee = Some(ieee);
-        }
-
-        if frame_control.multicast {
-            multicast_control = Some(remaining[0]);
-            remaining = &remaining[1..];
-        }
-
-        if frame_control.source_route {
-            let relay_count = remaining[0];
-            source_route_relay_index = Some(remaining[1]);
-            remaining = &remaining[2..];
-
-            let mut temp_source_route = Vec::new();
-
-            for _ in 0..relay_count {
-                let nwk;
-                (nwk, remaining) = Nwk::deserialize(remaining)?;
-                temp_source_route.push(nwk);
+        let destination_ieee = match frame_control.destination {
+            true => {
+                let ieee;
+                (ieee, remaining) = Eui64::deserialize(remaining)?;
+                Some(ieee)
             }
+            false => None,
+        };
 
-            source_route = Some(temp_source_route);
-        }
+        let source_ieee = match frame_control.extended_source {
+            true => {
+                let ieee;
+                (ieee, remaining) = Eui64::deserialize(remaining)?;
+                Some(ieee)
+            }
+            false => None,
+        };
+
+        let multicast_control = match frame_control.multicast {
+            true => {
+                let control = remaining[0];
+                remaining = &remaining[1..];
+                Some(control)
+            }
+            false => None,
+        };
+
+        let source_route = match frame_control.source_route {
+            true => {
+                let source_route;
+                (source_route, remaining) = NwkSourceRoute::deserialize(remaining)?;
+                Some(source_route)
+            }
+            false => None,
+        };
 
         Ok((
             Self {
-                frame_control,
-                destination,
-                source,
-                radius,
-                sequence_number,
-                destination_ieee,
-                source_ieee,
-                multicast_control,
-                source_route_relay_index,
-                source_route,
+                frame_control: frame_control,
+                destination: destination,
+                source: source,
+                radius: radius,
+                sequence_number: sequence_number,
+                destination_ieee: destination_ieee,
+                source_ieee: source_ieee,
+                multicast_control: multicast_control,
+                source_route: source_route,
             },
             remaining,
         ))
@@ -206,11 +250,11 @@ impl NwkHeader {
         bytes.push(self.radius);
         bytes.push(self.sequence_number);
 
-        if let Some(ieee) = self.destination_ieee {
+        if let Some(ieee) = &self.destination_ieee {
             bytes.extend(ieee.to_bytes());
         }
 
-        if let Some(ieee) = self.source_ieee {
+        if let Some(ieee) = &self.source_ieee {
             bytes.extend(ieee.to_bytes());
         }
 
@@ -218,20 +262,8 @@ impl NwkHeader {
             bytes.push(control);
         }
 
-        if self.source_route.is_none() != self.source_route_relay_index.is_none() {
-            panic!("Source route relay index must be present if source route is present");
-        }
-
-        if let Some(relay_index) = self.source_route_relay_index {
-            // Unnecessary
-            if let Some(source_route) = &self.source_route {
-                bytes.push(source_route.len() as u8);
-                bytes.push(relay_index);
-
-                for nwk in source_route {
-                    bytes.extend(nwk.to_bytes());
-                }
-            }
+        if let Some(source_route) = &self.source_route {
+            bytes.extend(source_route.to_bytes());
         }
 
         bytes
@@ -673,7 +705,6 @@ mod test {
                 destination_ieee: None,
                 source_ieee: None,
                 multicast_control: None,
-                source_route_relay_index: None,
                 source_route: None,
             },
             aux_header: Some(NwkAuxHeader {
