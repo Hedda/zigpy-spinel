@@ -86,6 +86,31 @@ pub enum Address {
     EUI64(EUI64),
 }
 
+#[derive(PartialEq, Copy, Clone)]
+pub struct PanId(pub u16);
+
+impl PanId {
+    pub fn deserialize(bytes: &[u8]) -> Result<(Self, &[u8]), &'static str> {
+        if bytes.len() < 2 {
+            return Err("Not enough data to parse PanId");
+        }
+
+        Ok((Self(u16::from_le_bytes([bytes[0], bytes[1]])), &bytes[2..]))
+    }
+
+    pub fn to_bytes(&self) -> [u8; 2] {
+        self.0.to_le_bytes()
+    }
+}
+
+impl fmt::Debug for PanId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("PanId")
+            .field(&format_args!("0x{:04x}", self.0))
+            .finish()
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub struct Key(pub [u8; 16]);
 

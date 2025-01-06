@@ -1,4 +1,4 @@
-use crate::types::{format_hex, EUI64, NWK};
+use crate::types::{format_hex, PanId, EUI64, NWK};
 
 use derivative::Derivative;
 use std::convert::TryFrom;
@@ -146,9 +146,9 @@ pub enum Ieee802154Address {
 pub struct Ieee802154Frame {
     pub frame_control: Ieee802154FrameControl,
     pub sequence_number: Option<u8>,
-    pub dest_pan_id: Option<u16>,
+    pub dest_pan_id: Option<PanId>,
     pub dest_address: Option<Ieee802154Address>,
-    pub src_pan_id: Option<u16>,
+    pub src_pan_id: Option<PanId>,
     pub src_address: Option<Ieee802154Address>,
     #[derivative(Debug(format_with = "format_hex"))]
     pub payload: Vec<u8>,
@@ -168,56 +168,36 @@ impl Ieee802154Frame {
             return Err("Invalid FCS");
         }
 
-        let mut offset = 0;
-
         // Parse frame control
         let frame_control;
-        (frame_control, remaining) = Ieee802154FrameControl::deserialize(data)?;
+        (frame_control, remaining) = Ieee802154FrameControl::deserialize(remaining)?;
 
         // Parse sequence number
         let sequence_number = if frame_control.sequence_number_suppression {
             None
         } else {
-            Some(remaining[offset])
-        };
-
-        offset += if frame_control.sequence_number_suppression {
-            0
-        } else {
-            1
+            let seq = remaining[0];
+            remaining = &remaining[1..];
+            Some(seq)
         };
 
         // Parse destination PAN ID and address
         let (dest_pan_id, dest_address) = match frame_control.dest_addr_mode {
             Ieee802154AddressingMode::Short => {
-                let pan_id = u16::from_le_bytes([remaining[offset], remaining[offset + 1]]);
-                offset += 2;
+                let pan_id;
+                (pan_id, remaining) = PanId::deserialize(remaining)?;
 
-                let address = Ieee802154Address::NWK(NWK(u16::from_le_bytes([
-                    remaining[offset],
-                    remaining[offset + 1],
-                ])));
-                offset += 2;
-
-                (Some(pan_id), Some(address))
+                let nwk;
+                (nwk, remaining) = NWK::deserialize(remaining)?;
+                (Some(pan_id), Some(Ieee802154Address::NWK(nwk)))
             }
             Ieee802154AddressingMode::Long => {
-                let pan_id = u16::from_le_bytes([remaining[offset], remaining[offset + 1]]);
-                offset += 2;
+                let pan_id;
+                (pan_id, remaining) = PanId::deserialize(remaining)?;
 
-                let address = Ieee802154Address::EUI64(EUI64([
-                    remaining[offset],
-                    remaining[offset + 1],
-                    remaining[offset + 2],
-                    remaining[offset + 3],
-                    remaining[offset + 4],
-                    remaining[offset + 5],
-                    remaining[offset + 6],
-                    remaining[offset + 7],
-                ]));
-                offset += 8;
-
-                (Some(pan_id), Some(address))
+                let eui64;
+                (eui64, remaining) = EUI64::deserialize(remaining)?;
+                (Some(pan_id), Some(Ieee802154Address::EUI64(eui64)))
             }
             Ieee802154AddressingMode::None => (None, None),
         };
@@ -226,8 +206,8 @@ impl Ieee802154Frame {
         let src_pan_id = if frame_control.pan_id_compression {
             dest_pan_id
         } else if frame_control.frame_type == Ieee802154FrameType::Data {
-            let pan_id = u16::from_le_bytes([remaining[offset], remaining[offset + 1]]);
-            offset += 2;
+            let pan_id;
+            (pan_id, remaining) = PanId::deserialize(remaining)?;
             Some(pan_id)
         } else {
             None
@@ -236,32 +216,20 @@ impl Ieee802154Frame {
         // Parse source address
         let src_address = match frame_control.src_addr_mode {
             Ieee802154AddressingMode::Short => {
-                let address = Ieee802154Address::NWK(NWK(u16::from_le_bytes([
-                    remaining[offset],
-                    remaining[offset + 1],
-                ])));
-                offset += 2;
-                Some(address)
+                let nwk;
+                (nwk, remaining) = NWK::deserialize(remaining)?;
+                Some(Ieee802154Address::NWK(nwk))
             }
             Ieee802154AddressingMode::Long => {
-                let address = Ieee802154Address::EUI64(EUI64([
-                    remaining[offset],
-                    remaining[offset + 1],
-                    remaining[offset + 2],
-                    remaining[offset + 3],
-                    remaining[offset + 4],
-                    remaining[offset + 5],
-                    remaining[offset + 6],
-                    remaining[offset + 7],
-                ]));
-                offset += 8;
-                Some(address)
+                let eui64;
+                (eui64, remaining) = EUI64::deserialize(remaining)?;
+                Some(Ieee802154Address::EUI64(eui64))
             }
             _ => None,
         };
 
         // Remaining bytes are payload
-        let payload = remaining[offset..remaining.len() - 2].to_vec();
+        let payload = remaining.to_vec();
 
         Ok(Self {
             frame_control,
@@ -296,7 +264,7 @@ impl Ieee802154Frame {
 
         // Serialize destination
         if let Some(pan_id) = self.dest_pan_id {
-            data.extend(pan_id.to_le_bytes());
+            data.extend(pan_id.to_bytes());
         }
         if let Some(address) = &self.dest_address {
             data.extend(match address {
@@ -308,7 +276,7 @@ impl Ieee802154Frame {
         // Serialize source
         if !self.frame_control.pan_id_compression {
             if let Some(pan_id) = self.src_pan_id {
-                data.extend(pan_id.to_le_bytes());
+                data.extend(pan_id.to_bytes());
             }
         }
 
@@ -403,12 +371,12 @@ mod test {
         );
 
         assert_eq!(frame.sequence_number, Some(163));
-        assert_eq!(frame.dest_pan_id, Some(0x3EF5));
+        assert_eq!(frame.dest_pan_id, Some(PanId(0x3EF5)));
         assert_eq!(
             frame.dest_address,
             Some(Ieee802154Address::NWK(NWK(0x5234)))
         );
-        assert_eq!(frame.src_pan_id, Some(0x3EF5));
+        assert_eq!(frame.src_pan_id, Some(PanId(0x3EF5)));
         assert_eq!(frame.src_address, Some(Ieee802154Address::NWK(NWK(0xF663))));
 
         assert_eq!(frame.payload, bytes[9..bytes.len() - 2]);
@@ -489,9 +457,9 @@ mod test {
                 src_addr_mode: Ieee802154AddressingMode::Short,
             },
             sequence_number: Some(52),
-            dest_pan_id: Some(0xBEEF),
+            dest_pan_id: Some(PanId(0xBEEF)),
             dest_address: Some(Ieee802154Address::NWK(NWK(0x9D90))),
-            src_pan_id: Some(0xBEEF),
+            src_pan_id: Some(PanId(0xBEEF)),
             src_address: Some(Ieee802154Address::NWK(NWK(0x3E44))),
             payload: hex!("48020000443e1eb4287cc54700e095dd0c018817000033a8fc4eb11941104ea261f13064f175f477d311e62736b708a6a390a4f8b120df6cd3ec5c24").to_vec(),
             fcs: 0x8146,
