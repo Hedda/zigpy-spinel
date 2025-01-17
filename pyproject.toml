@@ -91,3 +91,7 @@ source = ["zigpy_spinel"]
 
 [tool.pyupgrade]
 py37plus = true
+
+[tool.codespell]
+ignore-words-list = ["crate"]
+skip = ["ziggurat/Cargo.lock", "pyproject.toml"]
