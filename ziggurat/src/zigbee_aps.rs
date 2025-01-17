@@ -26,6 +26,7 @@ impl TryFrom<u8> for ApsFrameType {
 pub enum ApsDeliveryMode {
     Unicast = 0b00,
     Broadcast = 0b10,
+    Multicast = 0b11,
 }
 
 impl TryFrom<u8> for ApsDeliveryMode {
@@ -35,6 +36,7 @@ impl TryFrom<u8> for ApsDeliveryMode {
         match value {
             0b00 => Ok(ApsDeliveryMode::Unicast),
             0b10 => Ok(ApsDeliveryMode::Broadcast),
+            0b11 => Ok(ApsDeliveryMode::Multicast),
             _ => Err("Invalid APS delivery mode"),
         }
     }
