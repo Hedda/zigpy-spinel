@@ -303,13 +303,13 @@ impl TryFrom<u8> for NwkSecurityHeaderKeyId {
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum NwkSecurityLevel {
     NoSecurity = 0x00,
-    AesCbcMac32 = 0x01,
-    AesCbcMac64 = 0x02,
-    AesCbcMac128 = 0x03,
-    AesCtr = 0x04,
-    AesCcm32 = 0x05,
-    AesCcm64 = 0x06,
-    AesCcm128 = 0x07,
+    Mic32 = 0x01,
+    Mic64 = 0x02,
+    Mic128 = 0x03,
+    Enc = 0x04,
+    EncMic32 = 0x05,
+    EncMic64 = 0x06,
+    EncMic128 = 0x07,
 }
 
 impl TryFrom<u8> for NwkSecurityLevel {
@@ -318,13 +318,13 @@ impl TryFrom<u8> for NwkSecurityLevel {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0x00 => Ok(NwkSecurityLevel::NoSecurity),
-            0x01 => Ok(NwkSecurityLevel::AesCbcMac32),
-            0x02 => Ok(NwkSecurityLevel::AesCbcMac64),
-            0x03 => Ok(NwkSecurityLevel::AesCbcMac128),
-            0x04 => Ok(NwkSecurityLevel::AesCtr),
-            0x05 => Ok(NwkSecurityLevel::AesCcm32),
-            0x06 => Ok(NwkSecurityLevel::AesCcm64),
-            0x07 => Ok(NwkSecurityLevel::AesCcm128),
+            0x01 => Ok(NwkSecurityLevel::Mic32),
+            0x02 => Ok(NwkSecurityLevel::Mic64),
+            0x03 => Ok(NwkSecurityLevel::Mic128),
+            0x04 => Ok(NwkSecurityLevel::Enc),
+            0x05 => Ok(NwkSecurityLevel::EncMic32),
+            0x06 => Ok(NwkSecurityLevel::EncMic64),
+            0x07 => Ok(NwkSecurityLevel::EncMic128),
             _ => Err("Invalid Nwk security level"),
         }
     }
@@ -634,7 +634,7 @@ impl NwkFrame {
 
         let crypto = self.get_crypto();
 
-        let aux_header = self.get_modified_aux_header(NwkSecurityLevel::AesCcm32);
+        let aux_header = self.get_modified_aux_header(NwkSecurityLevel::EncMic32);
         let nonce = self.get_nonce(&aux_header);
         let (ciphertext, encrypted_mac_tag) = crypto.split_mac_tag(&self.payload);
         let (provided_mac_tag, plaintext) =
@@ -660,7 +660,7 @@ impl NwkFrame {
 
         let crypto = self.get_crypto();
 
-        let aux_header = self.get_modified_aux_header(NwkSecurityLevel::AesCcm32);
+        let aux_header = self.get_modified_aux_header(NwkSecurityLevel::EncMic32);
         let nonce = self.get_nonce(&aux_header);
         let plaintext = &self.payload;
 
