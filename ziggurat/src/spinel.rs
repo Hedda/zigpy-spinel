@@ -239,7 +239,7 @@ pub fn packed_uint21_deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), &'static 
         result = (result << 7) | (*chunk as u32);
     }
 
-    Ok((result, &bytes[ended_index..]))
+    Ok((result, &bytes[ended_index + 1..]))
 }
 
 pub fn packed_uint21_to_bytes(value: u32) -> Vec<u8> {
@@ -349,5 +349,25 @@ impl HdlcLiteFrame {
         let mut result = self.data.clone();
         result.extend(&crc.to_le_bytes());
         result
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use hex_literal::hex;
+
+    #[test]
+    fn test_uint21_to_bytes() {
+        assert_eq!(packed_uint21_to_bytes(0x1FD7FC), hex!("fcaf7f").to_vec());
+    }
+
+    #[test]
+    fn test_uint21_deserialize() {
+        let data = hex!("fcaf7fabcd");
+        let (value, remaining) = packed_uint21_deserialize(&data).unwrap();
+
+        assert_eq!(value, 0x1FD7FC);
+        assert_eq!(remaining, hex!("abcd").to_vec());
     }
 }
