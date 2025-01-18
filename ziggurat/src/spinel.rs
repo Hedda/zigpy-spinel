@@ -214,68 +214,40 @@ pub enum SpinelStatus {
 }
 
 pub fn packed_uint21_deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), &'static str> {
-    if bytes.len() < 1 {
-        return Err("Not enough data to parse a uint21");
-    }
+    let mut result = 0u32;
 
-    let b1 = bytes[0];
+    for (index, byte) in bytes[..3].iter().enumerate() {
+        result |= ((byte & 0b01111111) as u32) << (7 * index);
 
-    if b1 & 0b10000000 == 0 {
-        return Ok((((b1 & 0b01111111) as u32) << 0, &bytes[1..]));
-    }
-
-    if bytes.len() == 1 {
-        return Err("Packed uint21 is longer than one byte but buffer is not");
-    }
-
-    let b2 = bytes[1];
-
-    if b2 & 0b10000000 == 0 {
-        return Ok((
-            (((b2 & 0b01111111) as u32) << 7) | (((b1 & 0b01111111) as u32) << 0),
-            &bytes[2..],
-        ));
-    }
-
-    if bytes.len() == 2 {
-        return Err("Packed uint21 is longer than two bytes but buffer is not");
-    }
-
-    let b3 = bytes[2];
-
-    if b3 & 0b10000000 == 0 {
-        return Ok((
-            (((b3 & 0b01111111) as u32) << 14)
-                | (((b2 & 0b01111111) as u32) << 7)
-                | (((b1 & 0b01111111) as u32) << 0),
-            &bytes[3..],
-        ));
+        if byte & 0b10000000 == 0 {
+            return Ok((result, &bytes[index + 1..]));
+        }
     }
 
     return Err("Packed uint21 did not terminate");
 }
 
 pub fn packed_uint21_to_bytes(value: u32) -> Vec<u8> {
+    if value == 0 {
+        return [0].to_vec();
+    }
+
+    if value > U21_MAX {
+        panic!("Cannot serialize value, too big");
+    }
+
     let mut chunks = Vec::new();
     let mut temp = value;
 
-    loop {
+    while temp > 0 {
         // Set the least significant bit on all other octets
         chunks.push(((temp as u8) & 0b01111111) | 0b10000000);
         temp >>= 7;
-
-        if temp == 0 {
-            break;
-        }
     }
 
     // Clear the most significant bit of the most significant octet
     let len = chunks.len();
     chunks[len - 1] &= 0b01111111;
-
-    if chunks.len() > 3 {
-        panic!("Cannot serialize value, too big");
-    }
 
     chunks
 }
