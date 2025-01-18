@@ -20,3 +20,6 @@ strum_macros = "0.26.4"
 [[bin]]
 name = "ziggurat-pcap"
 path = "src/tools/dump_pcap.rs"
+
+[dev-dependencies]
+rand = "0.8.5"

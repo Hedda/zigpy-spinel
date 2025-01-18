@@ -325,14 +325,30 @@ impl HdlcLiteFrame {
         })
     }
 
-    fn serialize(&self) -> Vec<u8> {
+    fn to_bytes(&self) -> Vec<u8> {
         let mut crc = 0x0000u16;
         CRC_KERMIT.init_crc(&mut crc);
         CRC_KERMIT.update_crc(&mut crc, &self.data);
         CRC_KERMIT.finish_crc(&mut crc);
 
-        let mut result = self.data.clone();
-        result.extend(&crc.to_le_bytes());
+        let mut result = Vec::new();
+
+        for byte in self.data.iter().chain(&crc.to_le_bytes()) {
+            let result_byte = *byte;
+
+            if result_byte == (HdlcSpecial::Flag as u8)
+                || result_byte == (HdlcSpecial::Escape as u8)
+                || result_byte == (HdlcSpecial::Xon as u8)
+                || result_byte == (HdlcSpecial::Xoff as u8)
+                || result_byte == (HdlcSpecial::Vendor as u8)
+            {
+                result.push(HdlcSpecial::Escape as u8);
+                result.push(result_byte ^ 0x20);
+            } else {
+                result.push(result_byte);
+            }
+        }
+
         result
     }
 }
@@ -341,6 +357,9 @@ impl HdlcLiteFrame {
 mod test {
     use super::*;
     use hex_literal::hex;
+    use rand::rngs::StdRng;
+    use rand::Rng;
+    use rand::SeedableRng;
 
     #[test]
     fn test_uint21_to_bytes() {
@@ -366,6 +385,41 @@ mod test {
 
             assert_eq!(value, parsed_value);
             assert_eq!(remaining, hex!("abcd").to_vec());
+        }
+    }
+
+    #[test]
+    fn test_hdlc_lite_frame() {
+        let frame = HdlcLiteFrame {
+            // Special bytes interleaved with 00
+            data: hex!("00 7E 00 7D 00 11 00 13 00 F8 00").to_vec(),
+        };
+
+        assert_eq!(
+            frame.to_bytes(),
+            hex!("00 7D5E 00 7D5D 00 7D31 00 7D33 00 7DD8 00 D77D5E")
+        );
+
+        let parsed_frame = HdlcLiteFrame::from_bytes(&frame.to_bytes()).unwrap();
+        assert_eq!(frame, parsed_frame);
+    }
+
+    #[test]
+    fn test_hdlc_lite_frame_stress() {
+        let mut rng = StdRng::seed_from_u64(0);
+
+        for _ in 0..1000 {
+            let len = rng.gen_range(1..1000);
+            let mut data = Vec::new();
+
+            for _ in 0..len {
+                data.push(rng.gen());
+            }
+
+            let frame = HdlcLiteFrame { data: data.clone() };
+            let parsed_frame = HdlcLiteFrame::from_bytes(&frame.to_bytes()).unwrap();
+
+            assert_eq!(frame, parsed_frame);
         }
     }
 }
