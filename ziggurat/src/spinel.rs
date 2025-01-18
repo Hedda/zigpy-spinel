@@ -218,29 +218,41 @@ pub fn packed_uint21_deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), &'static 
         return Err("Not enough data to parse a uint21");
     }
 
-    let mut buffer: [u8; 3] = [0, 0, 0];
-    let mut ended_index = usize::MAX;
+    let b1 = bytes[0];
 
-    for (index, byte) in bytes[0..3].iter().enumerate() {
-        buffer[index] = byte & 0b01111111;
-
-        if byte & 0b10000000 == 0 {
-            ended_index = index;
-            break;
-        }
+    if b1 & 0b10000000 == 0 {
+        return Ok((((b1 & 0b01111111) as u32) << 0, &bytes[1..]));
     }
 
-    if ended_index == usize::MAX {
-        return Err("Packed uint21 did not terminate");
+    if bytes.len() == 1 {
+        return Err("Packed uint21 is longer than one byte but buffer is not");
     }
 
-    let mut result: u32 = 0b00000000_00000000_00000000;
+    let b2 = bytes[1];
 
-    for chunk in buffer.iter().rev() {
-        result = (result << 7) | (*chunk as u32);
+    if b2 & 0b10000000 == 0 {
+        return Ok((
+            (((b2 & 0b01111111) as u32) << 7) | (((b1 & 0b01111111) as u32) << 0),
+            &bytes[2..],
+        ));
     }
 
-    Ok((result, &bytes[ended_index + 1..]))
+    if bytes.len() == 2 {
+        return Err("Packed uint21 is longer than two bytes but buffer is not");
+    }
+
+    let b3 = bytes[2];
+
+    if b3 & 0b10000000 == 0 {
+        return Ok((
+            (((b3 & 0b01111111) as u32) << 14)
+                | (((b2 & 0b01111111) as u32) << 7)
+                | (((b1 & 0b01111111) as u32) << 0),
+            &bytes[3..],
+        ));
+    }
+
+    return Err("Packed uint21 did not terminate");
 }
 
 pub fn packed_uint21_to_bytes(value: u32) -> Vec<u8> {
