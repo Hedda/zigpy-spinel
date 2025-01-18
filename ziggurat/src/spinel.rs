@@ -4,6 +4,7 @@ use crc_all::CrcAlgo;
 use strum_macros::FromRepr;
 
 const CRC_KERMIT: CrcAlgo<u16> = CrcAlgo::<u16>::new(0x1021, 16, 0xFFFF, 0xFFFF, true);
+const U21_MAX: u32 = 1 << 21;
 
 #[derive(Debug, PartialEq, Copy, Clone, FromRepr)]
 pub enum SpinelCommandId {
@@ -243,10 +244,6 @@ pub fn packed_uint21_deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), &'static 
 }
 
 pub fn packed_uint21_to_bytes(value: u32) -> Vec<u8> {
-    if value > (2 << 21) {
-        panic!("Cannot serialize value, too big");
-    }
-
     let mut chunks = Vec::new();
     let mut temp = value;
 
@@ -263,6 +260,10 @@ pub fn packed_uint21_to_bytes(value: u32) -> Vec<u8> {
     // Clear the most significant bit of the most significant octet
     let len = chunks.len();
     chunks[len - 1] &= 0b01111111;
+
+    if chunks.len() > 3 {
+        panic!("Cannot serialize value, too big");
+    }
 
     chunks
 }
@@ -369,5 +370,18 @@ mod test {
 
         assert_eq!(value, 0x1FD7FC);
         assert_eq!(remaining, hex!("abcd").to_vec());
+    }
+
+    #[test]
+    fn test_uint21_stress() {
+        for value in 0..U21_MAX {
+            let mut serialized = packed_uint21_to_bytes(value);
+            serialized.extend(hex!("abcd"));
+
+            let (parsed_value, remaining) = packed_uint21_deserialize(&serialized).unwrap();
+
+            assert_eq!(value, parsed_value);
+            assert_eq!(remaining, hex!("abcd").to_vec());
+        }
     }
 }
