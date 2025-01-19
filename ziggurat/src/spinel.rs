@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use crc_all::CrcAlgo;
+use std::collections::HashMap;
 use strum_macros::FromRepr;
 
 const CRC_KERMIT: CrcAlgo<u16> = CrcAlgo::<u16>::new(0x1021, 16, 0xFFFF, 0xFFFF, true);
@@ -315,6 +316,7 @@ impl HdlcLiteFrame {
         CRC_KERMIT.init_crc(&mut crc);
         CRC_KERMIT.update_crc(&mut crc, &data[..data.len() - 2]);
         CRC_KERMIT.finish_crc(&mut crc);
+        crc ^= 0xFFFF;
 
         if crc != u16::from_le_bytes([data[data.len() - 2], data[data.len() - 1]]) {
             return Err(HdlcLiteFrameParsingError::InvalidCrc);
@@ -330,6 +332,7 @@ impl HdlcLiteFrame {
         CRC_KERMIT.init_crc(&mut crc);
         CRC_KERMIT.update_crc(&mut crc, &self.data);
         CRC_KERMIT.finish_crc(&mut crc);
+        crc ^= 0xFFFF;
 
         let mut result = Vec::new();
 
@@ -350,6 +353,150 @@ impl HdlcLiteFrame {
         }
 
         result
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct SpinelHeader {
+    pub flag: u8,
+    pub network_link_id: u8,
+    pub transaction_id: u8,
+}
+
+impl SpinelHeader {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        if bytes.len() < 1 {
+            return Err("Not enough data to parse SpinelHeader");
+        }
+
+        let byte = bytes[0];
+
+        // 10_00_0001
+        Ok(Self {
+            flag: (byte & 0b11000000) >> 6,
+            network_link_id: (byte & 0b00110000) >> 4,
+            transaction_id: (byte & 0b00001111) >> 0,
+        })
+    }
+
+    pub fn to_bytes(&self) -> [u8; 1] {
+        [(self.flag << 6) | (self.network_link_id << 4) | (self.transaction_id << 0)]
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum SpinelFrameParsingError {
+    PayloadTooShort,
+    NotSpinelFrame,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct SpinelFrame {
+    pub header: SpinelHeader,
+    pub command_id: u8,
+    pub payload: Vec<u8>,
+}
+
+impl SpinelFrame {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, SpinelFrameParsingError> {
+        if bytes.len() < 3 {
+            return Err(SpinelFrameParsingError::PayloadTooShort);
+        }
+
+        let header = SpinelHeader::from_bytes(&bytes[..1]).unwrap();
+
+        if header.flag != 0b10 {
+            return Err(SpinelFrameParsingError::NotSpinelFrame);
+        }
+
+        let command_id = bytes[1];
+        let payload = bytes[2..].to_vec();
+
+        Ok(Self {
+            header: header,
+            command_id: command_id,
+            payload: payload,
+        })
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut result = Vec::new();
+
+        result.extend(&self.header.to_bytes());
+        result.push(self.command_id);
+        result.extend(self.payload.iter());
+
+        result
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct SpinelProtocol {
+    pub transaction_id: u8,
+    pub pending_frames: HashMap<u8, SpinelFrame>,
+    pub buffer: Vec<u8>,
+    // For parsing
+    pub ignoring_until_next_flag: bool,
+}
+
+impl SpinelProtocol {
+    pub fn new() -> Self {
+        Self {
+            transaction_id: 0,
+            pending_frames: HashMap::new(),
+            buffer: Vec::new(),
+            ignoring_until_next_flag: true,
+        }
+    }
+
+    pub fn receive_bytes(&mut self, bytes: &[u8]) -> Vec<SpinelFrame> {
+        self.buffer.extend(bytes);
+
+        let mut frames = Vec::new();
+
+        loop {
+            let index = self
+                .buffer
+                .iter()
+                .position(|&x| x == HdlcSpecial::Flag as u8);
+
+            if index.is_none() {
+                break;
+            }
+
+            if self.ignoring_until_next_flag {
+                self.ignoring_until_next_flag = false;
+                continue;
+            }
+
+            // Ignore consecutive flags
+            if index.unwrap() > 0 {
+                println!("Trying to decode {:?}", &self.buffer[0..index.unwrap()]);
+
+                let result = HdlcLiteFrame::from_bytes(&self.buffer[0..index.unwrap()]);
+                println!("{:?}", result);
+
+                let spinel_result = SpinelFrame::from_bytes(&result.unwrap().data);
+                println!("{:?}", spinel_result);
+
+                match HdlcLiteFrame::from_bytes(&self.buffer[0..index.unwrap()]) {
+                    Err(HdlcLiteFrameParsingError::BadEscapeByte)
+                    | Err(HdlcLiteFrameParsingError::InvalidCrc)
+                    | Err(HdlcLiteFrameParsingError::BadLength) => {}
+                    Ok(frame) => match SpinelFrame::from_bytes(&frame.data) {
+                        Err(SpinelFrameParsingError::PayloadTooShort)
+                        | Err(SpinelFrameParsingError::NotSpinelFrame) => {}
+                        Ok(parsed_frame) => {
+                            frames.push(parsed_frame);
+                        }
+                    },
+                }
+            }
+
+            self.buffer.drain(0..index.unwrap() + 1);
+        }
+
+        return frames;
     }
 }
 
@@ -397,11 +544,30 @@ mod test {
 
         assert_eq!(
             frame.to_bytes(),
-            hex!("00 7D5E 00 7D5D 00 7D31 00 7D33 00 7DD8 00 D77D5E")
+            hex!("00 7D5E 00 7D5D 00 7D31 00 7D33 00 7DD8 00 2881")
         );
 
         let parsed_frame = HdlcLiteFrame::from_bytes(&frame.to_bytes()).unwrap();
         assert_eq!(frame, parsed_frame);
+    }
+
+    #[test]
+    fn test_hdlc_lite_frame_vectors() {
+        assert_eq!(
+            HdlcLiteFrame {
+                data: hex!("810243").to_vec()
+            }
+            .to_bytes(),
+            hex!("810243d3d3")
+        );
+
+        assert_eq!(
+            HdlcLiteFrame {
+                data: hex!("8103367e7d").to_vec()
+            }
+            .to_bytes(),
+            hex!("8103367d5e7d5d6af9")
+        );
     }
 
     #[test]
@@ -421,5 +587,108 @@ mod test {
 
             assert_eq!(frame, parsed_frame);
         }
+    }
+
+    #[test]
+    fn test_spinel_header_parsing() {
+        let data = hex!("81");
+        let header = SpinelHeader::from_bytes(&data).unwrap();
+
+        assert_eq!(
+            header,
+            SpinelHeader {
+                flag: 0b10,
+                network_link_id: 0,
+                transaction_id: 1
+            }
+        );
+
+        assert_eq!(header.to_bytes(), data);
+    }
+
+    #[test]
+    fn test_spinel_parsing_bulk() {
+        let data = hex!("7E   81 02 02 5E 80   7E 7E   7E 81 02 02 5E 80  7E 81 02 02 5E 80 7E");
+        let mut protocol = SpinelProtocol::new();
+
+        let frames = protocol.receive_bytes(&data);
+
+        assert_eq!(
+            frames,
+            vec![
+                SpinelFrame {
+                    header: SpinelHeader {
+                        flag: 0b10,
+                        network_link_id: 0,
+                        transaction_id: 1
+                    },
+                    command_id: 2,
+                    payload: vec![2]
+                },
+                SpinelFrame {
+                    header: SpinelHeader {
+                        flag: 0b10,
+                        network_link_id: 0,
+                        transaction_id: 1
+                    },
+                    command_id: 2,
+                    payload: vec![2]
+                },
+                SpinelFrame {
+                    header: SpinelHeader {
+                        flag: 0b10,
+                        network_link_id: 0,
+                        transaction_id: 1
+                    },
+                    command_id: 2,
+                    payload: vec![2]
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn test_spinel_parsing_byte_by_byte() {
+        let data = hex!("7E   81 02 02 5E 80   7E 7E   7E 81 02 02 5E 80  7E 81 02 02 5E 80 7E");
+
+        let mut protocol = SpinelProtocol::new();
+        let mut frames = Vec::new();
+
+        for byte in data {
+            frames.extend(protocol.receive_bytes(&[byte]));
+        }
+
+        assert_eq!(
+            frames,
+            vec![
+                SpinelFrame {
+                    header: SpinelHeader {
+                        flag: 0b10,
+                        network_link_id: 0,
+                        transaction_id: 1
+                    },
+                    command_id: 2,
+                    payload: vec![2]
+                },
+                SpinelFrame {
+                    header: SpinelHeader {
+                        flag: 0b10,
+                        network_link_id: 0,
+                        transaction_id: 1
+                    },
+                    command_id: 2,
+                    payload: vec![2]
+                },
+                SpinelFrame {
+                    header: SpinelHeader {
+                        flag: 0b10,
+                        network_link_id: 0,
+                        transaction_id: 1
+                    },
+                    command_id: 2,
+                    payload: vec![2]
+                }
+            ]
+        );
     }
 }
