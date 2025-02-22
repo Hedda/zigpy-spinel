@@ -14,7 +14,20 @@ edition = "2021"
 "shellexpand" = "=3.1.0"
 "inline_colorization" = "0.1.6"
 derivative = "2.2.0"
+crc_all = "0.2.2"
+strum_macros = "0.26.4"
+serial2-tokio = "0.1.14"
+tokio = { version = "1.43.0", features = ["full"] }
+tracing = "0.1.41"
 
 [[bin]]
 name = "ziggurat-pcap"
 path = "src/tools/dump_pcap.rs"
+
+[[bin]]
+name = "ziggurat-capture"
+path = "src/tools/packet_capture.rs"
+
+[dev-dependencies]
+cargo-debug = "0.3.0"
+rand = "0.8.5"
