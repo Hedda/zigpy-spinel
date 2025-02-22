@@ -3,6 +3,7 @@
 use crc_all::CrcAlgo;
 use std::collections::HashMap;
 use strum_macros::FromRepr;
+use tokio::sync::oneshot;
 
 const CRC_KERMIT: CrcAlgo<u16> = CrcAlgo::<u16>::new(0x1021, 16, 0xFFFF, 0xFFFF, true);
 const U21_MAX: u32 = 1 << 21;
@@ -275,7 +276,7 @@ pub struct HdlcLiteFrame {
 }
 
 impl HdlcLiteFrame {
-    fn from_bytes(bytes: &[u8]) -> Result<Self, HdlcLiteFrameParsingError> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, HdlcLiteFrameParsingError> {
         if bytes.len() < 2 {
             return Err(HdlcLiteFrameParsingError::BadLength);
         }
@@ -327,7 +328,7 @@ impl HdlcLiteFrame {
         })
     }
 
-    fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         let mut crc = 0x0000u16;
         CRC_KERMIT.init_crc(&mut crc);
         CRC_KERMIT.update_crc(&mut crc, &self.data);
@@ -430,29 +431,32 @@ impl SpinelFrame {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug)]
 pub struct SpinelProtocol {
-    pub transaction_id: u8,
-    pub pending_frames: HashMap<u8, SpinelFrame>,
     pub buffer: Vec<u8>,
-    // For parsing
     pub ignoring_until_next_flag: bool,
+    pub next_tid: u8,
+    pub pending_frames: HashMap<u8, oneshot::Sender<SpinelFrame>>,
 }
 
 impl SpinelProtocol {
     pub fn new() -> Self {
         Self {
-            transaction_id: 0,
-            pending_frames: HashMap::new(),
             buffer: Vec::new(),
             ignoring_until_next_flag: true,
+            next_tid: 1,
+            pending_frames: HashMap::new(),
         }
     }
 
-    pub fn receive_bytes(&mut self, bytes: &[u8]) -> Vec<SpinelFrame> {
+    pub fn parse_frames_from_bytes_into(
+        &mut self,
+        bytes: &[u8],
+        into: &mut Vec<SpinelFrame>,
+    ) -> usize {
         self.buffer.extend(bytes);
 
-        let mut frames = Vec::new();
+        let mut num_parsed_frames = 0;
 
         loop {
             let index = self
@@ -471,14 +475,6 @@ impl SpinelProtocol {
 
             // Ignore consecutive flags
             if index.unwrap() > 0 {
-                println!("Trying to decode {:?}", &self.buffer[0..index.unwrap()]);
-
-                let result = HdlcLiteFrame::from_bytes(&self.buffer[0..index.unwrap()]);
-                println!("{:?}", result);
-
-                let spinel_result = SpinelFrame::from_bytes(&result.unwrap().data);
-                println!("{:?}", spinel_result);
-
                 match HdlcLiteFrame::from_bytes(&self.buffer[0..index.unwrap()]) {
                     Err(HdlcLiteFrameParsingError::BadEscapeByte)
                     | Err(HdlcLiteFrameParsingError::InvalidCrc)
@@ -487,7 +483,8 @@ impl SpinelProtocol {
                         Err(SpinelFrameParsingError::PayloadTooShort)
                         | Err(SpinelFrameParsingError::NotSpinelFrame) => {}
                         Ok(parsed_frame) => {
-                            frames.push(parsed_frame);
+                            into.push(parsed_frame);
+                            num_parsed_frames += 1;
                         }
                     },
                 }
@@ -496,7 +493,64 @@ impl SpinelProtocol {
             self.buffer.drain(0..index.unwrap() + 1);
         }
 
-        return frames;
+        return num_parsed_frames;
+    }
+
+    pub fn parse_frames_from_bytes(&mut self, bytes: &[u8]) -> Vec<SpinelFrame> {
+        let mut frames = Vec::new();
+        self.parse_frames_from_bytes_into(bytes, &mut frames);
+
+        frames
+    }
+
+    pub fn handle_inbound_bytes(&mut self, bytes: &[u8]) {
+        for frame in self.parse_frames_from_bytes(bytes) {
+            eprintln!("Got frame {:?}", frame);
+
+            self.handle_inbound_frame(frame);
+        }
+    }
+
+    pub fn handle_inbound_frame(&mut self, frame: SpinelFrame) {
+        let tid = frame.header.transaction_id;
+
+        if let Some(sender) = self.pending_frames.remove(&tid) {
+            let _ = sender.send(frame);
+        } else {
+            eprintln!("Unsolicited or unmatched frame: {:?}", frame);
+        }
+    }
+
+    pub fn prepare_request(
+        &mut self,
+        command_id: u8,
+        payload: Vec<u8>,
+    ) -> (SpinelFrame, oneshot::Receiver<SpinelFrame>) {
+        // Cycle TIDs from 1..7
+        let tid = self.next_tid;
+        self.next_tid = 1 + (tid % 7);
+
+        let header = SpinelHeader {
+            flag: 0b10,
+            network_link_id: 0,
+            transaction_id: tid,
+        };
+
+        let frame = SpinelFrame {
+            header,
+            command_id,
+            payload,
+        };
+
+        // Create a one-shot channel for the response
+        let (tx, rx) = oneshot::channel();
+        self.pending_frames.insert(tid, tx);
+
+        (frame, rx)
+    }
+
+    pub fn cancel_request(&mut self, tid: u8) {
+        self.pending_frames.remove(&tid);
     }
 }
 
@@ -611,7 +665,7 @@ mod test {
         let data = hex!("7E   81 02 02 5E 80   7E 7E   7E 81 02 02 5E 80  7E 81 02 02 5E 80 7E");
         let mut protocol = SpinelProtocol::new();
 
-        let frames = protocol.receive_bytes(&data);
+        let frames = protocol.parse_frames_from_bytes(&data);
 
         assert_eq!(
             frames,
@@ -655,7 +709,7 @@ mod test {
         let mut frames = Vec::new();
 
         for byte in data {
-            frames.extend(protocol.receive_bytes(&[byte]));
+            frames.extend(protocol.parse_frames_from_bytes(&[byte]));
         }
 
         assert_eq!(
@@ -689,6 +743,54 @@ mod test {
                     payload: vec![2]
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn test_spinel_sending_request() {
+        let mut protocol = SpinelProtocol::new();
+
+        // Simulate sending a request. This transaction was taken from a universal-silabs-flasher
+        // session with a real device.
+        protocol.next_tid = 3;
+
+        let (request, mut rx) = protocol.prepare_request(
+            SpinelCommandId::PropValueGet as u8,
+            packed_uint21_to_bytes(SpinelPropertyId::NcpVersion as u32),
+        );
+        assert_eq!(
+            request,
+            SpinelFrame {
+                header: SpinelHeader {
+                    flag: 0b10,
+                    network_link_id: 0,
+                    transaction_id: 3,
+                },
+                command_id: SpinelCommandId::PropValueGet as u8,
+                payload: packed_uint21_to_bytes(SpinelPropertyId::NcpVersion as u32)
+            }
+        );
+
+        // Receive a response
+        protocol.handle_inbound_bytes(
+            b"~\x83\x06\x02SL-OPENTHREAD/2.4.4.0_GitHub-7074a43e4; EFR32; Oct 21 2024 1",
+        );
+        protocol.handle_inbound_bytes(b"4:40:57\x00\x81\xf7~");
+
+        let response = rx.try_recv().unwrap();
+        assert_eq!(
+            response,
+            SpinelFrame {
+                header: SpinelHeader {
+                    flag: 0b10,
+                    network_link_id: 0,
+                    transaction_id: 3,
+                },
+                command_id: SpinelCommandId::PropValueIs as u8,
+                payload:
+                    b"\x02SL-OPENTHREAD/2.4.4.0_GitHub-7074a43e4; EFR32; Oct 21 2024 14:40:57\x00"
+                        .to_vec()
+            }
         );
     }
 }
