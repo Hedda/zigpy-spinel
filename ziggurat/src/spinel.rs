@@ -218,11 +218,15 @@ pub enum SpinelStatus {
 pub fn packed_uint21_deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), &'static str> {
     let mut result = 0u32;
 
-    for (index, byte) in bytes[..3].iter().enumerate() {
+    for (index, byte) in bytes.iter().enumerate() {
         result |= ((byte & 0b01111111) as u32) << (7 * index);
 
         if byte & 0b10000000 == 0 {
             return Ok((result, &bytes[index + 1..]));
+        }
+
+        if index >= 2 {
+            break;
         }
     }
 
@@ -352,6 +356,16 @@ impl HdlcLiteFrame {
                 result.push(result_byte);
             }
         }
+
+        result
+    }
+
+    pub fn to_bytes_with_flags(&self) -> Vec<u8> {
+        let mut result = Vec::new();
+
+        result.push(HdlcSpecial::Flag as u8);
+        result.extend(self.to_bytes());
+        result.push(HdlcSpecial::Flag as u8);
 
         result
     }
