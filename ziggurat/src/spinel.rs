@@ -3,7 +3,7 @@
 use crc_all::CrcAlgo;
 use std::collections::HashMap;
 use strum_macros::FromRepr;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 const CRC_KERMIT: CrcAlgo<u16> = CrcAlgo::<u16>::new(0x1021, 16, 0xFFFF, 0xFFFF, true);
 const U21_MAX: u32 = 1 << 21;
@@ -445,12 +445,39 @@ impl SpinelFrame {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SpinelFramePropValueIs {
+    pub property_id: u32,
+    pub value: Vec<u8>,
+}
+
+impl SpinelFramePropValueIs {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        match packed_uint21_deserialize(bytes) {
+            Ok((property_id, remaining)) => Ok(Self {
+                property_id: property_id,
+                value: remaining.to_vec(),
+            }),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut result = packed_uint21_to_bytes(self.property_id);
+        result.extend(self.value.iter());
+
+        result
+    }
+}
+
 #[derive(Debug)]
 pub struct SpinelProtocol {
     pub buffer: Vec<u8>,
     pub ignoring_until_next_flag: bool,
     pub next_tid: u8,
     pub pending_frames: HashMap<u8, oneshot::Sender<SpinelFrame>>,
+    pub unsolicited_frame_receiver: Option<mpsc::Sender<SpinelFrame>>,
+    pub property_update_receivers: HashMap<u32, mpsc::Sender<SpinelFramePropValueIs>>,
 }
 
 impl SpinelProtocol {
@@ -460,7 +487,21 @@ impl SpinelProtocol {
             ignoring_until_next_flag: true,
             next_tid: 1,
             pending_frames: HashMap::new(),
+            unsolicited_frame_receiver: None,
+            property_update_receivers: HashMap::new(),
         }
+    }
+
+    pub fn set_unsolicited_frame_receiver(&mut self, tx: mpsc::Sender<SpinelFrame>) {
+        self.unsolicited_frame_receiver = Some(tx);
+    }
+
+    pub fn set_property_update_receiver(
+        &mut self,
+        property_id: u32,
+        tx: mpsc::Sender<SpinelFramePropValueIs>,
+    ) {
+        self.property_update_receivers.insert(property_id, tx);
     }
 
     pub fn parse_frames_from_bytes_into(
@@ -519,8 +560,6 @@ impl SpinelProtocol {
 
     pub fn handle_inbound_bytes(&mut self, bytes: &[u8]) {
         for frame in self.parse_frames_from_bytes(bytes) {
-            eprintln!("Got frame {:?}", frame);
-
             self.handle_inbound_frame(frame);
         }
     }
@@ -528,7 +567,30 @@ impl SpinelProtocol {
     pub fn handle_inbound_frame(&mut self, frame: SpinelFrame) {
         let tid = frame.header.transaction_id;
 
-        if let Some(sender) = self.pending_frames.remove(&tid) {
+        if tid == 0 {
+            if frame.command_id == SpinelCommandId::PropValueIs as u8 {
+                match SpinelFramePropValueIs::from_bytes(&frame.payload) {
+                    Ok(prop_value_is) => {
+                        match self
+                            .property_update_receivers
+                            .get(&prop_value_is.property_id)
+                        {
+                            Some(sender) => {
+                                let _ = sender.try_send(prop_value_is);
+                            }
+                            None => {
+                                eprintln!("No receiver for property update: {:?}", prop_value_is);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        eprintln!("Failed to parse PropValueIs frame: {:?}", frame);
+                    }
+                }
+            } else {
+                eprintln!("Unhandled unsolicited frame: {:?}", frame);
+            }
+        } else if let Some(sender) = self.pending_frames.remove(&tid) {
             let _ = sender.send(frame);
         } else {
             eprintln!("Unsolicited or unmatched frame: {:?}", frame);
@@ -559,6 +621,8 @@ impl SpinelProtocol {
         // Create a one-shot channel for the response
         let (tx, rx) = oneshot::channel();
         self.pending_frames.insert(tid, tx);
+
+        eprintln!("Prepared frame {:?}", frame);
 
         (frame, rx)
     }

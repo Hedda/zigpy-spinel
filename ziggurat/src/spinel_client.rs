@@ -1,17 +1,20 @@
 use crate::spinel::{
-    packed_uint21_deserialize, packed_uint21_to_bytes, HdlcLiteFrame, HdlcSpecial, SpinelCommandId,
-    SpinelFrame, SpinelProtocol, SpinelResetReason,
+    packed_uint21_deserialize, packed_uint21_to_bytes, HdlcLiteFrame, SpinelCommandId, SpinelFrame,
+    SpinelPropertyId, SpinelProtocol,
 };
 use serial2_tokio::SerialPort;
+use std::string::String;
+
 use std::sync::Arc;
-use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 
+const TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Clone)]
 pub struct SpinelClient {
-    port: Arc<SerialPort>,
-    protocol: Arc<Mutex<SpinelProtocol>>,
+    pub port: Arc<SerialPort>,
+    pub protocol: Arc<Mutex<SpinelProtocol>>,
 }
 
 #[derive(Debug)]
@@ -40,8 +43,6 @@ impl SpinelClient {
             loop {
                 match port_clone.read(&mut buffer).await {
                     Ok(n) if n > 0 => {
-                        eprintln!("Read {} bytes: {:?}", n, &buffer[..n]);
-
                         let mut protocol = client_clone.lock().await;
                         protocol.handle_inbound_bytes(&buffer[..n])
                     }
@@ -58,11 +59,10 @@ impl SpinelClient {
         });
     }
 
-    pub async fn send_command_with_timeout(
+    pub async fn send_command(
         &self,
         command_id: u8,
         payload: Vec<u8>,
-        timeout_duration: Duration,
     ) -> Result<SpinelFrame, SpinelSendError> {
         let (frame, rx) = {
             let mut guard = self.protocol.lock().await;
@@ -74,14 +74,13 @@ impl SpinelClient {
         };
 
         let data = hdlc_frame.to_bytes_with_flags();
-        eprintln!("Sending: {:?}", data);
 
         self.port
             .write(&data)
             .await
             .map_err(SpinelSendError::IoError)?;
 
-        match timeout(timeout_duration, rx).await {
+        match timeout(TIMEOUT, rx).await {
             Ok(Ok(response_frame)) => Ok(response_frame),
             Ok(Err(_recv_closed)) => {
                 let mut guard = self.protocol.lock().await;
@@ -98,16 +97,11 @@ impl SpinelClient {
         }
     }
 
-    pub async fn prop_value_get(
-        &self,
-        property_id: u32,
-        timeout_duration: Duration,
-    ) -> Result<Vec<u8>, SpinelSendError> {
+    pub async fn prop_value_get(&self, property_id: u32) -> Result<Vec<u8>, SpinelSendError> {
         let response = self
-            .send_command_with_timeout(
+            .send_command(
                 SpinelCommandId::PropValueGet as u8,
                 packed_uint21_to_bytes(property_id),
-                timeout_duration,
             )
             .await?;
 
@@ -136,17 +130,15 @@ impl SpinelClient {
         &self,
         property_id: u32,
         value: Vec<u8>,
-        timeout_duration: Duration,
     ) -> Result<Vec<u8>, SpinelSendError> {
         let response = self
-            .send_command_with_timeout(
+            .send_command(
                 SpinelCommandId::PropValueSet as u8,
                 packed_uint21_to_bytes(property_id)
                     .iter()
                     .chain(value.iter())
                     .cloned()
                     .collect(),
-                timeout_duration,
             )
             .await?;
 
@@ -169,5 +161,19 @@ impl SpinelClient {
         }
 
         Ok(payload.to_vec())
+    }
+
+    pub async fn get_ncp_version(&self) -> Result<String, SpinelSendError> {
+        let ncp_version_rsp = self
+            .prop_value_get(SpinelPropertyId::NcpVersion as u32)
+            .await
+            .unwrap();
+
+        let ncp_version_with_null =
+            String::from_utf8(ncp_version_rsp).expect("Invalid UTF-8 string");
+
+        Ok(ncp_version_with_null
+            .trim_matches(char::from(0x00))
+            .to_string())
     }
 }
