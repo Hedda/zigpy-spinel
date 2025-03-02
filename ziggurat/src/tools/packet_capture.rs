@@ -1,7 +1,7 @@
 use serial2_tokio::SerialPort;
 use ziggurat::ieee_802154::Ieee802154Frame;
 use ziggurat::spinel::SpinelPropertyId;
-use ziggurat::spinel_client::SpinelClient;
+use ziggurat::spinel_client::{SpinelClient, SpinelRxFrame};
 
 use tokio::sync::mpsc;
 
@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("Failed to set the MAC promiscuous mode");
 
     client
-        .prop_value_set(SpinelPropertyId::PhyChan as u32, vec![25])
+        .prop_value_set(SpinelPropertyId::PhyChan as u32, vec![20])
         .await
         .expect("Failed to set the PHY");
 
@@ -48,21 +48,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         guard.set_property_update_receiver(SpinelPropertyId::StreamRaw as u32, stream_raw_tx);
     }
 
+    println!("Listening for packets...");
+
     while let Some(stream_raw_prop) = stream_raw_rx.recv().await {
         let raw_packet = stream_raw_prop.value;
-        if raw_packet.len() < 2 {
-            continue;
-        }
+        let packet = match SpinelRxFrame::from_bytes(&raw_packet) {
+            Ok(packet) => packet,
+            Err(e) => {
+                eprintln!("Error parsing packet: {:?}", e);
+                continue;
+            }
+        };
 
-        let packet_len = u16::from_le_bytes([raw_packet[0], raw_packet[1]]) as usize;
-        if packet_len > raw_packet.len() - 2 {
-            continue;
-        }
-
-        let frame_data = raw_packet[2..packet_len + 2].to_vec();
-
-        if let Ok(ieee_frame) = Ieee802154Frame::from_bytes_without_fcs(&frame_data) {
-            println!("Received frame: {:#?}\n\n", ieee_frame);
+        if let Ok(ieee_frame) = Ieee802154Frame::from_bytes_without_fcs(&packet.psdu) {
+            println!("Received packet {:#?}: {:#?}\n\n", packet, ieee_frame);
         }
     }
 

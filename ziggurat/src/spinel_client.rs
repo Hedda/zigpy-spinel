@@ -1,6 +1,6 @@
 use crate::spinel::{
     packed_uint21_deserialize, packed_uint21_to_bytes, HdlcLiteFrame, SpinelCommandId, SpinelFrame,
-    SpinelPropertyId, SpinelProtocol,
+    SpinelPropertyId, SpinelProtocol, SpinelStatus,
 };
 use serial2_tokio::SerialPort;
 use std::string::String;
@@ -10,6 +10,119 @@ use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct SpinelTxFrame {
+    pub psdu: Vec<u8>,
+    pub channel: u8,
+    pub cca_backoff_attempts: u8,
+    pub cca_retries: u8,
+    pub is_header_updated: bool,
+    pub is_a_retransmit: bool,
+    pub is_security_processed: bool,
+    pub tx_delay: u32,
+    pub tx_delay_base_time: u32,
+    pub rx_channel_after_tx: u8,
+}
+
+impl SpinelTxFrame {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut result = Vec::new();
+        result.extend_from_slice(&self.psdu.len().to_le_bytes());
+        result.extend_from_slice(&self.psdu);
+        result.push(self.channel);
+        result.push(self.cca_backoff_attempts);
+        result.push(self.cca_retries);
+        result.push(self.is_header_updated as u8);
+        result.push(self.is_a_retransmit as u8);
+        result.push(self.is_security_processed as u8);
+        result.extend_from_slice(&self.tx_delay.to_le_bytes());
+        result.extend_from_slice(&self.tx_delay_base_time.to_le_bytes());
+        result.push(self.rx_channel_after_tx as u8);
+
+        result
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct SpinelRxFrame {
+    pub psdu: Vec<u8>,
+    pub rssi: i8,
+    pub noise_floor: i8,
+    pub flags: u32,
+    pub channel: u8,
+    pub lqi: u8,
+    pub timestamp_us: u64,
+    pub receive_error: u8,
+    pub manufacturer_specific: Vec<u8>,
+}
+
+impl SpinelRxFrame {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        eprintln!("bytes: {:02x?}", bytes);
+
+        let mut offset = 0;
+
+        let psdu_len = u16::from_le_bytes([bytes[offset], bytes[offset + 1]]) as usize;
+        offset += 2;
+
+        if offset + (psdu_len + 1 + 1 + 4 + 1 + 1 + 8 + 1) > bytes.len() {
+            return Err("Invalid frame length");
+        }
+
+        let psdu = bytes[offset..offset + psdu_len].to_vec();
+        offset += psdu_len;
+
+        let rssi = bytes[offset] as i8;
+        offset += 1;
+
+        let noise_floor = bytes[offset] as i8;
+        offset += 1;
+
+        let flags = u32::from_le_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ]);
+        offset += 4;
+
+        let channel = bytes[offset];
+        offset += 1;
+
+        let lqi = bytes[offset];
+        offset += 1;
+
+        let timestamp_us = u64::from_le_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ]);
+        offset += 8;
+
+        let receive_error = bytes[offset];
+        offset += 1;
+
+        let manufacturer_specific = bytes[offset..].to_vec();
+
+        Ok(Self {
+            psdu,
+            rssi,
+            noise_floor,
+            flags,
+            channel,
+            lqi,
+            timestamp_us,
+            receive_error,
+            manufacturer_specific,
+        })
+    }
+}
 
 #[derive(Clone)]
 pub struct SpinelClient {
@@ -106,7 +219,7 @@ impl SpinelClient {
             .await?;
 
         let response_payload = response.payload;
-        let (rsp_property_id, payload) = match packed_uint21_deserialize(&response_payload) {
+        let (_rsp_property_id, payload) = match packed_uint21_deserialize(&response_payload) {
             Ok((property_id, payload)) => (property_id, payload),
             Err(e) => {
                 return Err(SpinelSendError::IoError(std::io::Error::new(
@@ -116,13 +229,6 @@ impl SpinelClient {
             }
         };
 
-        if rsp_property_id != property_id {
-            return Err(SpinelSendError::IoError(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Property ID mismatch",
-            )));
-        }
-
         Ok(payload.to_vec())
     }
 
@@ -130,7 +236,7 @@ impl SpinelClient {
         &self,
         property_id: u32,
         value: Vec<u8>,
-    ) -> Result<Vec<u8>, SpinelSendError> {
+    ) -> Result<(u32, Vec<u8>), SpinelSendError> {
         let response = self
             .send_command(
                 SpinelCommandId::PropValueSet as u8,
@@ -153,16 +259,10 @@ impl SpinelClient {
             }
         };
 
-        if rsp_property_id != property_id {
-            return Err(SpinelSendError::IoError(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Property ID mismatch",
-            )));
-        }
-
-        Ok(payload.to_vec())
+        Ok((rsp_property_id, payload.to_vec()))
     }
 
+    // Convenience method wrapping broad functionality are below
     pub async fn get_ncp_version(&self) -> Result<String, SpinelSendError> {
         let ncp_version_rsp = self
             .prop_value_get(SpinelPropertyId::NcpVersion as u32)
@@ -175,5 +275,29 @@ impl SpinelClient {
         Ok(ncp_version_with_null
             .trim_matches(char::from(0x00))
             .to_string())
+    }
+
+    pub async fn transmit_frame(&self, tx_frame: SpinelTxFrame) -> Result<u8, SpinelSendError> {
+        let (rsp_prop_id, rsp) = self
+            .prop_value_set(SpinelPropertyId::StreamRaw as u32, tx_frame.to_bytes())
+            .await
+            .unwrap();
+
+        if rsp_prop_id != SpinelPropertyId::LastStatus as u32 {
+            return Err(SpinelSendError::IoError(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Unexpected response property ID",
+            )));
+        }
+
+        if rsp.len() < 1 {
+            return Err(SpinelSendError::IoError(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Unexpected response length",
+            )));
+        }
+
+        let status = rsp[0];
+        Ok(status)
     }
 }
