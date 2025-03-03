@@ -565,6 +565,7 @@ impl SpinelProtocol {
     }
 
     pub fn handle_inbound_frame(&mut self, frame: SpinelFrame) {
+        eprintln!("Received frame {:?}", frame);
         let tid = frame.header.transaction_id;
 
         if tid == 0 {

@@ -1,4 +1,5 @@
 use serial2_tokio::SerialPort;
+use std::env;
 use ziggurat::ieee_802154::Ieee802154Frame;
 use ziggurat::spinel::SpinelPropertyId;
 use ziggurat::spinel_client::{SpinelClient, SpinelRxFrame};
@@ -7,7 +8,8 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let port = SerialPort::open("/dev/cu.SLAB_USBtoUART", 460_800)?;
+    let args: Vec<String> = env::args().collect();
+    let port = SerialPort::open(&args[1], 460_800)?;
 
     let client = SpinelClient::new(port);
     client.spawn_reader();

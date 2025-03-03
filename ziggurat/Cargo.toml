@@ -28,6 +28,10 @@ path = "src/tools/dump_pcap.rs"
 name = "ziggurat-capture"
 path = "src/tools/packet_capture.rs"
 
+[[bin]]
+name = "ziggurat-sender"
+path = "src/tools/packet_sender.rs"
+
 [dev-dependencies]
 cargo-debug = "0.3.0"
 rand = "0.8.5"
