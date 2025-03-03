@@ -186,12 +186,15 @@ impl SpinelClient {
             guard.prepare_request(command_id, payload)
         };
 
+        log::debug!("Sending frame {:?}", frame);
+
         let hdlc_frame = HdlcLiteFrame {
             data: frame.to_bytes(),
         };
 
         let data = hdlc_frame.to_bytes_with_flags();
 
+        log::debug!("Writing {:02X?}", data);
         self.port
             .write(&data)
             .await
@@ -262,6 +265,14 @@ impl SpinelClient {
                 )))
             }
         };
+
+        log::info!(
+            "Setting property {}={:02X?}, result {}={:02X?}",
+            property_id,
+            value,
+            rsp_property_id,
+            payload
+        );
 
         Ok((rsp_property_id, payload.to_vec()))
     }

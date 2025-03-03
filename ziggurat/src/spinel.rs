@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 
 use crc_all::CrcAlgo;
+use env_logger::Builder;
+use log;
+use log::LevelFilter;
 use std::collections::HashMap;
 use strum_macros::FromRepr;
 use tokio::sync::{mpsc, oneshot};
@@ -559,13 +562,15 @@ impl SpinelProtocol {
     }
 
     pub fn handle_inbound_bytes(&mut self, bytes: &[u8]) {
+        log::debug!("RX bytes: {bytes:?}");
+
         for frame in self.parse_frames_from_bytes(bytes) {
             self.handle_inbound_frame(frame);
         }
     }
 
     pub fn handle_inbound_frame(&mut self, frame: SpinelFrame) {
-        eprintln!("Received frame {:?}", frame);
+        log::debug!("RX: {frame:?}");
         let tid = frame.header.transaction_id;
 
         if tid == 0 {
@@ -622,8 +627,6 @@ impl SpinelProtocol {
         // Create a one-shot channel for the response
         let (tx, rx) = oneshot::channel();
         self.pending_frames.insert(tid, tx);
-
-        eprintln!("Prepared frame {:?}", frame);
 
         (frame, rx)
     }
