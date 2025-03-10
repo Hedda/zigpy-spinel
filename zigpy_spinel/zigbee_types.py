@@ -163,7 +163,11 @@ class IEEE802154Frame:
                 IEEE802154FrameType.Command,
             )
         ):
-            data += self.src_pan_id.serialize()
+            if not (
+                self.frame_control.frame_type == IEEE802154FrameType.Command
+                and self.payload == b"\x07"
+            ):
+                data += self.src_pan_id.serialize()
 
         if self.frame_control.src_addr_mode == IEEE802154AddressingMode.Short:
             data += self.src_address.serialize()

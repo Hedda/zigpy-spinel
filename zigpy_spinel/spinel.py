@@ -265,5 +265,5 @@ class SpinelProtocol(SerialProtocol):
             return
 
         await self.wait_for_property(
-            PropertyID.LAST_STATUS, Status.RESET_SOFTWARE.serialize()
+            PropertyID.LAST_STATUS, Status.RESET_POWER_ON.serialize()
         )
